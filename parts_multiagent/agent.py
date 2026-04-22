@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from .config import PartsAgentConfig
-from .csv_inventory import CsvInventory
+from .google_sheet_inventory import GoogleSheetConfig, GoogleSheetInventory
 from .inventory_log import log_inventory_response
 from .llm_client import LocalLlmClient
 from .peer_client import PeerDirectory
@@ -17,7 +17,15 @@ LOCAL_ONLY_PREFIX = '__PARTS_MULTIAGENT_LOCAL_ONLY__'
 class PartsMultiAgent:
     def __init__(self, config: PartsAgentConfig) -> None:
         self.config = config
-        self.inventory = CsvInventory(config.data_dir)
+        self.inventory = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file=(
+                    config.google_sheet.service_account_file
+                ),
+                spreadsheet_id=config.google_sheet.spreadsheet_id,
+                worksheet=config.google_sheet.worksheet,
+            )
+        )
         self.llm = LocalLlmClient(config.llm_base_url, config.llm_model)
         self.peers = PeerDirectory(
             config.peer_agent_urls, config.agent_name

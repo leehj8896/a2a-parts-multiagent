@@ -6,7 +6,7 @@ from typing import Any
 
 
 ROUTE_PROMPT_TEMPLATE = """
-You route a user's inventory question for an A2A LAN CSV multi-agent system.
+You route a user's inventory question for an A2A LAN Google Sheets multi-agent system.
 
 Return only JSON with this exact schema:
 {{

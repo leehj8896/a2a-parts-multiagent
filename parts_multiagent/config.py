@@ -3,16 +3,22 @@ from __future__ import annotations
 import os
 
 from dataclasses import dataclass
-from pathlib import Path
 from urllib.parse import urlparse
 
 
 DEFAULT_LLM_BASE_URL = 'http://joonyy-synology:26414/v1'
 DEFAULT_LLM_MODEL = 'github_copilot/gpt-4.1'
-DEFAULT_SKILL_ID = 'query_inventory_csv'
-DEFAULT_DATA_ROOT = './data'
+DEFAULT_SKILL_ID = 'query_inventory_google_sheet'
+DEFAULT_GOOGLE_SHEET_WORKSHEET = 'inventory'
 DEFAULT_HOST = '0.0.0.0'
 DEFAULT_PORT = 10001
+
+
+@dataclass(frozen=True)
+class GoogleSheetSettings:
+    service_account_file: str
+    spreadsheet_id: str
+    worksheet: str
 
 
 @dataclass(frozen=True)
@@ -20,7 +26,7 @@ class PartsAgentConfig:
     agent_name: str
     agent_description: str
     app_url: str
-    data_dir: str
+    google_sheet: GoogleSheetSettings
     llm_base_url: str
     llm_model: str
     peer_agent_urls: list[str]
@@ -49,16 +55,32 @@ def load_config() -> PartsAgentConfig:
         agent_name=agent_name,
         agent_description=os.getenv(
             'AGENT_DESCRIPTION',
-            'Queries local parts inventory CSV files.',
+            'Queries parts inventory from Google Sheets.',
         ),
         app_url=app_url,
-        data_dir=str(Path(DEFAULT_DATA_ROOT) / agent_name.lower()),
+        google_sheet=GoogleSheetSettings(
+            service_account_file=_required_env(
+                'GOOGLE_SERVICE_ACCOUNT_FILE'
+            ),
+            spreadsheet_id=_required_env('GOOGLE_SHEET_ID'),
+            worksheet=os.getenv(
+                'GOOGLE_SHEET_WORKSHEET',
+                DEFAULT_GOOGLE_SHEET_WORKSHEET,
+            ),
+        ),
         llm_base_url=os.getenv('LLM_BASE_URL', DEFAULT_LLM_BASE_URL),
         llm_model=os.getenv('LLM_MODEL', DEFAULT_LLM_MODEL),
         peer_agent_urls=peer_urls,
         host=DEFAULT_HOST,
         port=port,
     )
+
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name, '').strip()
+    if not value:
+        raise ValueError(f'{name} environment variable is required.')
+    return value
 
 
 def _load_port() -> int:

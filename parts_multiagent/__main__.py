@@ -44,12 +44,12 @@ def main() -> None:
     config = load_config()
     skill = AgentSkill(
         id=DEFAULT_SKILL_ID,
-        name='Query inventory CSV',
+        name='Query inventory Google Sheet',
         description=(
-            "Answers inventory questions using CSV files in this agent's "
-            'local data folder.'
+            "Answers inventory questions using this agent's configured "
+            'Google Sheet.'
         ),
-        tags=['csv', 'inventory', 'parts', 'stock'],
+        tags=['google-sheets', 'inventory', 'parts', 'stock'],
         examples=[
             '특정 부품 재고 조회해줘',
             '재고가 부족한 품목 알려줘',

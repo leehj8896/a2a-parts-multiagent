@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 
@@ -25,7 +26,11 @@ class RouteDecision:
     reason: str
 
     @classmethod
-    def local(cls, task: str, reason: str = 'fallback to local CSV query'):
+    def local(
+        cls,
+        task: str,
+        reason: str = 'fallback to local Google Sheet query',
+    ):
         return cls(
             route='local',
             target_agent_name=None,

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 
 SUMMARY_PROMPT_TEMPLATE = """
-You answer inventory questions from CSV query results.
+You answer inventory questions from Google Sheets query results.
 
 User question:
 {query}
 
-CSV context:
+Google Sheets context:
 {csv_context}
 
 Query result:
