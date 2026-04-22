@@ -1,0 +1,6 @@
+part_number,part_name,stock,location
+BRK-001,Brake Pad,4,B-01
+FLT-101,Oil Filter,36,B-02
+RAD-210,Radiator Hose,18,B-03
+BAT-500,Battery Pack,9,B-04
+SNS-808,Oxygen Sensor,21,B-05
