@@ -13,6 +13,18 @@ then provide `AGENT_NAME` when starting each process. The sample depends on
 The agent reads CSV files from `./data/<lowercase AGENT_NAME>`. For example,
 `AGENT_NAME=A` reads `./data/a/*.csv`.
 
+`data/` is local runtime data and is not committed to Git. Before running an
+agent, create the matching folder and add one or more CSV files locally. For
+example, `AGENT_NAME=A` needs files under `./data/a/`.
+
+Example inventory CSV:
+
+```csv
+part_number,part_name,stock,location
+BRK-001,Brake Pad,28,A-01
+FLT-101,Oil Filter,7,A-02
+```
+
 When `AGENT_NAME` is provided, the agent also loads an agent-specific env file
 named `.env.<lowercase AGENT_NAME>` if it exists. For example,
 `AGENT_NAME=A` loads `.env.a`, and `AGENT_NAME=B` loads `.env.b`. Values passed
