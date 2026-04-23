@@ -21,26 +21,28 @@ def log_inventory_response(
     rendered_tables = _render_csv_tables(response)
     if rendered_tables:
         logger.info(
-            '\n%s\nlocal_agent=%s\nsource_agent=%s\nquery=%s\n'
-            'response_type=table\n\n%s\n%s',
+            '\n%s\n로컬_에이전트=%s\n응답_에이전트=%s\n질의=%s\n'
+            '응답_형식=표\n\n%s\n%s',
             '=' * 72,
             local_agent,
             source_agent,
             query,
             '\n\n'.join(rendered_tables),
             '=' * 72,
+            extra={'agent_name': source_agent},
         )
         return
 
     logger.info(
-        '\n%s\nlocal_agent=%s\nsource_agent=%s\nquery=%s\n'
-        'response_type=text\n\n%s\n%s',
+        '\n%s\n로컬_에이전트=%s\n응답_에이전트=%s\n질의=%s\n'
+        '응답_형식=텍스트\n\n%s\n%s',
         '=' * 72,
         local_agent,
         source_agent,
         query,
-        response.strip() or '(empty response)',
+        response.strip() or '(빈 응답)',
         '=' * 72,
+        extra={'agent_name': source_agent},
     )
 
 

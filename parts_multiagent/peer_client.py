@@ -65,10 +65,10 @@ class PeerDirectory:
     async def send_message(self, agent_name: str, text: str) -> str:
         if agent_name == self.local_agent_name:
             raise ValueError(
-                f'Refusing to send a remote request to self: {agent_name}'
+                f'자기 자신에게 원격 요청을 보낼 수 없습니다: {agent_name}'
             )
         if agent_name not in self.cards:
-            raise ValueError(f'Peer agent not found: {agent_name}')
+            raise ValueError(f'피어 에이전트를 찾지 못했습니다: {agent_name}')
 
         message_id = uuid.uuid4().hex
         payload = {
@@ -91,7 +91,7 @@ class PeerDirectory:
             response = await a2a_client.send_message(request)
 
         if not isinstance(response.root, SendMessageSuccessResponse):
-            return f'Peer {agent_name} returned a non-success response.'
+            return f'피어 {agent_name}이 성공 응답이 아닌 응답을 반환했습니다.'
         result = response.root.result
         if isinstance(result, Task):
             return self._task_text(result)

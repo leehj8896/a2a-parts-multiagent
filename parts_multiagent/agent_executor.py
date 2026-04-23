@@ -35,7 +35,7 @@ class PartsMultiAgentExecutor(AgentExecutor):
                 status=TaskStatus(
                     state=TaskState.working,
                     message=new_agent_text_message(
-                        'Routing inventory request...'
+                        '재고 요청을 라우팅하는 중입니다...'
                     ),
                 ),
             )
@@ -65,4 +65,4 @@ class PartsMultiAgentExecutor(AgentExecutor):
     async def cancel(
         self, context: RequestContext, event_queue: EventQueue
     ) -> None:
-        raise Exception('cancel not supported')
+        raise Exception('취소를 지원하지 않습니다')

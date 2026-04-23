@@ -12,6 +12,22 @@ DEFAULT_SKILL_ID = 'query_inventory_google_sheet'
 DEFAULT_GOOGLE_SHEET_WORKSHEET = 'inventory'
 DEFAULT_HOST = '0.0.0.0'
 DEFAULT_PORT = 10001
+SUPPORTED_LOG_COLORS = {
+    'red',
+    'green',
+    'yellow',
+    'blue',
+    'magenta',
+    'cyan',
+    'white',
+    'bright_red',
+    'bright_green',
+    'bright_yellow',
+    'bright_blue',
+    'bright_magenta',
+    'bright_cyan',
+    'bright_white',
+}
 
 
 @dataclass(frozen=True)
@@ -32,6 +48,7 @@ class PartsAgentConfig:
     peer_agent_urls: list[str]
     host: str
     port: int
+    agent_log_colors: dict[str, str]
 
 
 def load_config() -> PartsAgentConfig:
@@ -73,6 +90,7 @@ def load_config() -> PartsAgentConfig:
         peer_agent_urls=peer_urls,
         host=DEFAULT_HOST,
         port=port,
+        agent_log_colors=_load_agent_log_colors(),
     )
 
 
@@ -91,6 +109,19 @@ def _load_port() -> int:
         raise ValueError(
             f'PORT environment variable must be an integer, got: {raw_port!r}'
         ) from exc
+
+
+def _load_agent_log_colors() -> dict[str, str]:
+    colors = {}
+    for item in os.getenv('LOG_COLORS', '').split(','):
+        name, separator, color = item.strip().partition('=')
+        if not separator:
+            name, separator, color = item.strip().partition(':')
+        name = name.strip()
+        color = color.strip().lower()
+        if name and color in SUPPORTED_LOG_COLORS:
+            colors[name] = color
+    return colors
 
 
 def _load_app_url(peer_urls: list[str], port: int) -> str:

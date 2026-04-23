@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from dotenv import dotenv_values, load_dotenv
 
 from .agent_executor import PartsMultiAgentExecutor
 from .config import DEFAULT_SKILL_ID, load_config
+from .logging_config import configure_logging
 
 
 def load_agent_dotenv() -> None:
@@ -36,19 +36,16 @@ def load_agent_dotenv() -> None:
 
 
 load_agent_dotenv()
-logging.basicConfig(level=logging.INFO)
 
 
 @click.command()
 def main() -> None:
     config = load_config()
+    configure_logging(config.agent_name, config.agent_log_colors)
     skill = AgentSkill(
         id=DEFAULT_SKILL_ID,
-        name='Query inventory Google Sheet',
-        description=(
-            "Answers inventory questions using this agent's configured "
-            'Google Sheet.'
-        ),
+        name='Google Sheet 재고 조회',
+        description='이 에이전트에 설정된 Google Sheet로 재고 질문에 답합니다.',
         tags=['google-sheets', 'inventory', 'parts', 'stock'],
         examples=[
             '특정 부품 재고 조회해줘',

@@ -46,13 +46,13 @@ class GoogleSheetInventory:
         if table is None:
             table = self._load_table()
         if table.frame.empty:
-            return f'No rows found in Google Sheet {table.source}'
+            return f'Google Sheet {table.source}에서 행을 찾지 못했습니다'
         columns = ', '.join(map(str, table.frame.columns))
         preview = table.frame.head(3).to_csv(index=False).strip()
         return (
             f'Google Sheet: {table.source}\n'
-            f'- {len(table.frame)} rows; columns: {columns}\n'
-            f'  preview:\n{preview}'
+            f'- 행 수: {len(table.frame)}; 열: {columns}\n'
+            f'  미리보기:\n{preview}'
         )
 
     def query(self, question: str) -> tuple[str, str]:
@@ -62,7 +62,7 @@ class GoogleSheetInventory:
             context = self._source_description()
             return (
                 context,
-                f'Google Sheet 조회에 실패했습니다: '
+                f'Google Sheet를 조회하지 못했습니다: '
                 f'{type(exc).__name__}: {exc}',
             )
 
@@ -113,12 +113,12 @@ class GoogleSheetInventory:
 
         preview = filtered.head(20).to_csv(index=False).strip()
         term_note = (
-            f" matched terms: {', '.join(used_terms)};"
+            f" 일치한 검색어: {', '.join(used_terms)};"
             if used_terms
             else ''
         )
         sections.append(
-            f'[{table.source}]{term_note} {len(filtered)} matching rows'
+            f'[{table.source}]{term_note} 일치한 행 수: {len(filtered)}'
             f'\n{preview}'
         )
         return context, '\n\n'.join(sections)

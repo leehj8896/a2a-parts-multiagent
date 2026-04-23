@@ -29,7 +29,7 @@ class RouteDecision:
     def local(
         cls,
         task: str,
-        reason: str = 'fallback to local Google Sheet query',
+        reason: str = '로컬 Google Sheet 조회로 대체',
     ):
         return cls(
             route='local',
@@ -58,10 +58,10 @@ class LocalLlmClient:
         peer_agents: list[dict[str, Any]],
     ) -> RouteDecision:
         prompt = self._route_prompt(query, local_agent, peer_agents)
-        _log_llm_block('LLM ROUTE PROMPT', prompt)
+        _log_llm_block('LLM 라우팅 프롬프트', prompt)
         try:
             content = await self._chat(prompt, temperature=0)
-            _log_llm_block('LLM ROUTE RESPONSE', content)
+            _log_llm_block('LLM 라우팅 응답', content)
             raw = self._extract_json(content)
             route = raw.get('route', 'local')
             if route not in {'local', 'remote'}:
@@ -71,16 +71,16 @@ class LocalLlmClient:
                 target_agent_name=raw.get('target_agent_name'),
                 skill_id=raw.get('skill_id') or DEFAULT_SKILL_ID,
                 task=raw.get('task') or query,
-                reason=raw.get('reason') or 'LLM routing decision',
+                reason=raw.get('reason') or 'LLM 라우팅 결정',
             )
         except Exception as exc:
             logger.warning(
-                'LLM route request failed: %s: %s',
+                'LLM 라우팅 요청에 실패했습니다: %s: %s',
                 type(exc).__name__,
                 exc,
             )
             return RouteDecision.local(
-                query, f'LLM routing failed: {type(exc).__name__}: {exc}'
+                query, f'LLM 라우팅 실패: {type(exc).__name__}: {exc}'
             )
 
     async def summarize_answer(
@@ -90,14 +90,14 @@ class LocalLlmClient:
         raw_result: str,
     ) -> str:
         prompt = build_summary_prompt(query, csv_context, raw_result)
-        _log_llm_block('LLM ANSWER PROMPT', prompt)
+        _log_llm_block('LLM 답변 프롬프트', prompt)
         try:
             content = await self._chat(prompt, temperature=0.2)
-            _log_llm_block('LLM ANSWER RESPONSE', content)
+            _log_llm_block('LLM 답변 응답', content)
             return content
         except Exception as exc:
             logger.warning(
-                'LLM answer request failed: %s: %s',
+                'LLM 답변 요청에 실패했습니다: %s: %s',
                 type(exc).__name__,
                 exc,
             )
@@ -136,7 +136,7 @@ class LocalLlmClient:
             return json.loads(stripped)
         match = re.search(r'\{.*\}', stripped, re.DOTALL)
         if not match:
-            raise ValueError('LLM response did not include JSON')
+            raise ValueError('LLM 응답에 JSON이 포함되어 있지 않습니다')
         return json.loads(match.group(0))
 
 

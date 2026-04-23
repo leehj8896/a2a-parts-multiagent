@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from .config import PartsAgentConfig
+from .constants.prefixes import LOCAL_AGENT_PREFIX, PEER_AGENTS_PREFIX
 from .google_sheet_inventory import GoogleSheetConfig, GoogleSheetInventory
 from .inventory_log import log_inventory_response
 from .llm_client import LocalLlmClient
@@ -11,7 +12,7 @@ from .peer_client import PeerDirectory
 
 
 logger = logging.getLogger(__name__)
-LOCAL_ONLY_PREFIX = '__PARTS_MULTIAGENT_LOCAL_ONLY__'
+EMPTY_QUERY_MESSAGE = '조회할 질문을 입력해주세요.'
 
 
 class PartsMultiAgent:
@@ -32,80 +33,58 @@ class PartsMultiAgent:
         )
 
     async def invoke(self, query: str) -> str:
-        local_only_task = self._local_only_task_from(query)
-        if local_only_task is not None:
-            return await self._query_local(local_only_task, local_only_task)
+        query = query.strip()
+        local_task = self._task_from_prefix(query, LOCAL_AGENT_PREFIX)
+        if local_task is not None:
+            if not local_task:
+                return EMPTY_QUERY_MESSAGE
+            return await self._query_local(local_task, local_task)
 
-        peer_errors = await self.peers.refresh()
-        local_summary = {
-            'name': self.config.agent_name,
-            'description': self.config.agent_description,
-            'data': self.inventory.describe(),
-        }
-        decision = await self.llm.choose_route(
-            query=query,
-            local_agent=local_summary,
-            peer_agents=self.peers.agent_summaries(),
-        )
+        peer_task = self._task_from_prefix(query, PEER_AGENTS_PREFIX)
+        if peer_task is not None:
+            if not peer_task:
+                return EMPTY_QUERY_MESSAGE
+            peer_errors = await self.peers.refresh()
+            return await self._query_peer_agents(peer_task, peer_errors)
 
-        if decision.route == 'remote' and decision.target_agent_name:
-            try:
-                peer_answer = await self.peers.send_message(
-                    decision.target_agent_name,
-                    self._local_only_message(decision.task),
-                )
-                log_inventory_response(
-                    logger=logger,
-                    local_agent=self.config.agent_name,
-                    source_agent=decision.target_agent_name,
-                    query=decision.task,
-                    response=peer_answer,
-                )
-                return (
-                    f'[{decision.target_agent_name}] 응답입니다.\n\n'
-                    f'{peer_answer}'
-                )
-            except Exception as exc:
-                errors = '\n'.join(peer_errors) if peer_errors else 'none'
-                return (
-                    f'원격 agent 요청에 실패했습니다: '
-                    f'{decision.target_agent_name}\n'
-                    f'오류: {type(exc).__name__}: {exc}\n'
-                    f'Peer discovery errors: {errors}'
-                )
+        if not query:
+            return EMPTY_QUERY_MESSAGE
 
-        return await self._query_all_agents(
-            query, decision.task or query, peer_errors
-        )
+        return await self._query_local_and_peer_agents(query, query)
 
-    async def _query_all_agents(
+    async def _query_local_and_peer_agents(
         self,
         query: str,
+        task: str,
+    ) -> str:
+        local_section = await self._query_local_agent_section(query, task)
+        peer_errors = await self.peers.refresh()
+        peer_section = await self._query_peer_agents(task, peer_errors)
+        return f'## 내 agent 조회\n\n{local_section}\n\n{peer_section}'
+
+    async def _query_peer_agents(
+        self,
         task: str,
         peer_errors: list[str],
     ) -> str:
         peer_names = self.peers.agent_names()
-        results = await asyncio.gather(
-            self._query_local(query, task),
+        if not peer_names:
+            answer = '## 다른 agent 조회\n\n조회 가능한 다른 agent가 없습니다.'
+            if peer_errors:
+                answer = self._append_peer_errors(answer, peer_errors)
+            return answer
+
+        peer_results = await asyncio.gather(
             *[
                 self.peers.send_message(
-                    peer_name, self._local_only_message(task)
+                    peer_name, self._peer_local_message(task)
                 )
                 for peer_name in peer_names
             ],
             return_exceptions=True,
         )
-        local_result, *peer_results = results
 
-        if isinstance(local_result, Exception):
-            sections = [
-                f'[{self.config.agent_name}] 요청 실패: '
-                f'{type(local_result).__name__}: {local_result}'
-            ]
-        else:
-            sections = [
-                f'[{self.config.agent_name}] 응답입니다.\n\n{local_result}'
-            ]
+        sections = []
         for peer_name, peer_result in zip(
             peer_names, peer_results, strict=True
         ):
@@ -124,14 +103,20 @@ class PartsMultiAgent:
             )
             sections.append(f'[{peer_name}] 응답입니다.\n\n{peer_result}')
 
-        answer = '\n\n'.join(sections)
+        answer = f'## 다른 agent 조회\n\n' + '\n\n'.join(sections)
         if peer_errors:
-            answer = (
-                f'{answer}\n\n'
-                '참고: 일부 peer agent의 AgentCard를 가져오지 못했습니다.\n'
-                + '\n'.join(f'- {error}' for error in peer_errors)
-            )
+            answer = self._append_peer_errors(answer, peer_errors)
         return answer
+
+    async def _query_local_agent_section(self, query: str, task: str) -> str:
+        try:
+            local_result = await self._query_local(query, task)
+        except Exception as exc:
+            return (
+                f'[{self.config.agent_name}] 요청 실패: '
+                f'{type(exc).__name__}: {exc}'
+            )
+        return f'[{self.config.agent_name}] 응답입니다.\n\n{local_result}'
 
     async def _query_local(self, query: str, task: str) -> str:
         context, raw_result = self.inventory.query(task)
@@ -144,10 +129,19 @@ class PartsMultiAgent:
         )
         return await self.llm.summarize_answer(query, context, raw_result)
 
-    def _local_only_message(self, task: str) -> str:
-        return f'{LOCAL_ONLY_PREFIX}\n{task}'
+    def _peer_local_message(self, task: str) -> str:
+        return f'{LOCAL_AGENT_PREFIX} {task}'
 
-    def _local_only_task_from(self, query: str) -> str | None:
-        if not query.startswith(LOCAL_ONLY_PREFIX):
-            return None
-        return query.removeprefix(LOCAL_ONLY_PREFIX).strip()
+    def _task_from_prefix(self, query: str, prefix: str) -> str | None:
+        if query == prefix:
+            return ''
+        if query.startswith(prefix) and query[len(prefix)].isspace():
+            return query[len(prefix) :].strip()
+        return None
+
+    def _append_peer_errors(self, answer: str, peer_errors: list[str]) -> str:
+        return (
+            f'{answer}\n\n'
+            '참고: 일부 peer agent의 AgentCard를 가져오지 못했습니다.\n'
+            + '\n'.join(f'- {error}' for error in peer_errors)
+        )
