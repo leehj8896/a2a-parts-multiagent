@@ -19,7 +19,9 @@ def agent_config() -> PartsAgentConfig:
         google_sheet=GoogleSheetSettings(
             service_account_file='/tmp/service-account.json',
             spreadsheet_id='sheet-a',
-            worksheet='inventory',
+            inventory_worksheet='inventory',
+            order_worksheet='orders',
+            inventory_headers=('부품번호', '부품명', '수량', '가격(원)'),
         ),
         llm_base_url='http://localhost:11434/v1',
         llm_model='test-model',

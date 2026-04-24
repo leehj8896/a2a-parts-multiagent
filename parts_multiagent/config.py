@@ -9,7 +9,9 @@ from urllib.parse import urlparse
 DEFAULT_LLM_BASE_URL = 'http://joonyy-synology:26414/v1'
 DEFAULT_LLM_MODEL = 'github_copilot/gpt-4.1'
 DEFAULT_SKILL_ID = 'query_inventory_google_sheet'
-DEFAULT_GOOGLE_SHEET_WORKSHEET = 'inventory'
+DEFAULT_GOOGLE_SHEET_INVENTORY_WORKSHEET = 'inventory'
+DEFAULT_GOOGLE_SHEET_ORDER_WORKSHEET = 'orders'
+DEFAULT_INVENTORY_HEADERS = ('부품번호', '부품명', '수량', '가격(원)')
 DEFAULT_HOST = '0.0.0.0'
 DEFAULT_PORT = 10001
 SUPPORTED_LOG_COLORS = {
@@ -34,7 +36,9 @@ SUPPORTED_LOG_COLORS = {
 class GoogleSheetSettings:
     service_account_file: str
     spreadsheet_id: str
-    worksheet: str
+    inventory_worksheet: str
+    order_worksheet: str
+    inventory_headers: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -80,9 +84,19 @@ def load_config() -> PartsAgentConfig:
                 'GOOGLE_SERVICE_ACCOUNT_FILE'
             ),
             spreadsheet_id=_required_env('GOOGLE_SHEET_ID'),
-            worksheet=os.getenv(
-                'GOOGLE_SHEET_WORKSHEET',
-                DEFAULT_GOOGLE_SHEET_WORKSHEET,
+            inventory_worksheet=os.getenv(
+                'GOOGLE_SHEET_INVENTORY_WORKSHEET',
+                DEFAULT_GOOGLE_SHEET_INVENTORY_WORKSHEET,
+            ),
+            order_worksheet=os.getenv(
+                'GOOGLE_SHEET_ORDER_WORKSHEET',
+                DEFAULT_GOOGLE_SHEET_ORDER_WORKSHEET,
+            ),
+            inventory_headers=tuple(
+                os.getenv(
+                    'GOOGLE_SHEET_INVENTORY_HEADERS',
+                    ','.join(DEFAULT_INVENTORY_HEADERS),
+                ).split(',')
             ),
         ),
         llm_base_url=os.getenv('LLM_BASE_URL', DEFAULT_LLM_BASE_URL),

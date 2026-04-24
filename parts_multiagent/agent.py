@@ -24,7 +24,9 @@ class PartsMultiAgent:
                     config.google_sheet.service_account_file
                 ),
                 spreadsheet_id=config.google_sheet.spreadsheet_id,
-                worksheet=config.google_sheet.worksheet,
+                inventory_worksheet=config.google_sheet.inventory_worksheet,
+                order_worksheet=config.google_sheet.order_worksheet,
+                inventory_headers=config.google_sheet.inventory_headers,
             )
         )
         self.llm = LocalLlmClient(config.llm_base_url, config.llm_model)
