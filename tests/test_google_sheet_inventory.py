@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import unittest
 
+from parts_multiagent.constants.stock_inbound_extraction import (
+    build_stock_inbound_extraction_prompt,
+)
 from parts_multiagent.google_sheet_inventory import (
     GoogleSheetConfig,
     GoogleSheetInventory,
+    StockCellUpdate,
+    StockChangeItem,
 )
 from parts_multiagent.constants.routing import build_route_prompt
 from parts_multiagent.constants.summarizing import build_summary_prompt
+from parts_multiagent.llm_client import LocalLlmClient
+from parts_multiagent.stock_inbound.parser import parse as parse_stock_inbound
+
+
+INVENTORY_HEADERS = ['부품번호', '부품명', '수량', '가격(원)']
 
 
 def inventory(values):
@@ -15,7 +25,9 @@ def inventory(values):
         GoogleSheetConfig(
             service_account_file='/tmp/service-account.json',
             spreadsheet_id='sheet-123',
-            worksheet='inventory',
+            inventory_worksheet='inventory',
+            order_worksheet='orders',
+            inventory_headers=tuple(INVENTORY_HEADERS),
         ),
         values_loader=lambda: values,
     )
@@ -25,9 +37,9 @@ class GoogleSheetInventoryTest(unittest.TestCase):
     def test_queries_specific_part(self) -> None:
         _, result = inventory(
             [
-                ['part_number', 'part_name', 'stock', 'location'],
-                ['BRK-001', 'Brake Pad', '28', 'A-01'],
-                ['FLT-101', 'Oil Filter', '7', 'A-02'],
+                INVENTORY_HEADERS,
+                ['BRK-001', 'Brake Pad', '28', '12000'],
+                ['FLT-101', 'Oil Filter', '7', '5000'],
             ]
         ).query('FLT-101 재고 알려줘')
 
@@ -38,10 +50,10 @@ class GoogleSheetInventoryTest(unittest.TestCase):
     def test_queries_low_stock_with_default_threshold(self) -> None:
         _, result = inventory(
             [
-                ['part_number', 'part_name', 'stock', 'location'],
-                ['BRK-001', 'Brake Pad', '28', 'A-01'],
-                ['FLT-101', 'Oil Filter', '7', 'A-02'],
-                ['BLT-404', 'Timing Belt', '3', 'A-03'],
+                INVENTORY_HEADERS,
+                ['BRK-001', 'Brake Pad', '28', '12000'],
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+                ['BLT-404', 'Timing Belt', '3', '21000'],
             ]
         ).query('재고 부족 품목 알려줘')
 
@@ -52,13 +64,13 @@ class GoogleSheetInventoryTest(unittest.TestCase):
     def test_queries_total_stock(self) -> None:
         _, result = inventory(
             [
-                ['part_number', 'part_name', 'stock', 'location'],
-                ['BRK-001', 'Brake Pad', '28', 'A-01'],
-                ['FLT-101', 'Oil Filter', '7', 'A-02'],
+                INVENTORY_HEADERS,
+                ['BRK-001', 'Brake Pad', '28', '12000'],
+                ['FLT-101', 'Oil Filter', '7', '5000'],
             ]
         ).query('전체 재고 합계')
 
-        self.assertIn('stock 합계: 35', result)
+        self.assertIn('수량 합계: 35', result)
 
     def test_empty_sheet_has_clear_message(self) -> None:
         context, result = inventory([]).query('재고 알려줘')
@@ -71,7 +83,9 @@ class GoogleSheetInventoryTest(unittest.TestCase):
             GoogleSheetConfig(
                 service_account_file='/tmp/service-account.json',
                 spreadsheet_id='sheet-123',
-                worksheet='missing',
+                inventory_worksheet='missing',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
             ),
             values_loader=lambda: (_ for _ in ()).throw(
                 RuntimeError('worksheet not found')
@@ -80,9 +94,495 @@ class GoogleSheetInventoryTest(unittest.TestCase):
 
         context, result = sheet.query('재고 알려줘')
 
-        self.assertIn('sheet-123/missing', context)
+        self.assertIn('missing', context)
         self.assertIn('Google Sheet를 조회하지 못했습니다', result)
         self.assertIn('worksheet not found', result)
+
+    def test_inbound_updates_stock_and_appends_order_rows(self) -> None:
+        stock_updates = []
+        order_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['BRK-001', 'Brake Pad', '28', '12000'],
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+            ],
+            stock_writer=stock_updates.extend,
+            order_appender=order_rows.extend,
+        )
+
+        _, result = sheet.change_stock(
+            'inbound',
+            [StockChangeItem('FLT-101', 3), StockChangeItem('BRK-001', 2)],
+            '/local-stock-inbound FLT-101 3, BRK-001 2',
+            'A',
+        )
+
+        self.assertIn('입고 처리 완료: 2건', result)
+        self.assertEqual(
+            stock_updates,
+            [StockCellUpdate(3, 3, 10), StockCellUpdate(2, 3, 30)],
+        )
+        self.assertEqual(len(order_rows), 2)
+        self.assertEqual(order_rows[0][1:10], ['A', '입고', 'FLT-101', 3, 7, 10, 15000, '/local-stock-inbound FLT-101 3, BRK-001 2', '성공'])
+
+    def test_outbound_rejects_when_stock_is_not_enough(self) -> None:
+        stock_updates = []
+        order_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+            ],
+            stock_writer=stock_updates.extend,
+            order_appender=order_rows.extend,
+        )
+
+        _, result = sheet.change_stock(
+            'outbound',
+            [StockChangeItem('FLT-101', 8)],
+            '/local-stock-outbound FLT-101 8',
+            'A',
+        )
+
+        self.assertIn('출고 수량이 현재 재고보다 큽니다', result)
+        self.assertEqual(stock_updates, [])
+        self.assertEqual(order_rows, [])
+
+    def test_inbound_adds_new_row_when_part_not_found(self) -> None:
+        stock_updates = []
+        order_rows = []
+        inventory_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['BRK-001', 'Brake Pad', '28', '12000'],
+            ],
+            stock_writer=stock_updates.extend,
+            order_appender=order_rows.extend,
+            inventory_appender=inventory_rows.extend,
+        )
+
+        _, result = sheet.change_stock(
+            'inbound',
+            [StockChangeItem('FLT-001', 5)],
+            '/local-stock-inbound FLT-001 5',
+            'A',
+        )
+
+        self.assertIn('입고 처리 완료: 1건', result)
+        self.assertIn('(신규)', result)
+        self.assertIn('0 -> 5', result)
+        self.assertEqual(stock_updates, [])
+        self.assertEqual(len(inventory_rows), 1)
+        row = inventory_rows[0]
+        self.assertIn('FLT-001', row)
+        self.assertIn(5, row)
+        self.assertEqual(len(order_rows), 1)
+        self.assertEqual(order_rows[0][1:10], ['A', '입고', 'FLT-001', 5, 0, 5, '', '/local-stock-inbound FLT-001 5', '성공'])
+
+    def test_inbound_mixes_existing_and_new_parts(self) -> None:
+        stock_updates = []
+        order_rows = []
+        inventory_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['BRK-001', 'Brake Pad', '10', '12000'],
+            ],
+            stock_writer=stock_updates.extend,
+            order_appender=order_rows.extend,
+            inventory_appender=inventory_rows.extend,
+        )
+
+        _, result = sheet.change_stock(
+            'inbound',
+            [StockChangeItem('BRK-001', 2), StockChangeItem('FLT-001', 3)],
+            '/local-stock-inbound BRK-001 2, FLT-001 3',
+            'A',
+        )
+
+        self.assertIn('입고 처리 완료: 2건', result)
+        self.assertEqual(stock_updates, [StockCellUpdate(2, 3, 12)])
+        self.assertEqual(len(inventory_rows), 1)
+        self.assertEqual(len(order_rows), 2)
+
+    def test_outbound_returns_error_when_part_not_found(self) -> None:
+        stock_updates = []
+        inventory_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['BRK-001', 'Brake Pad', '10', '12000'],
+            ],
+            stock_writer=stock_updates.extend,
+            order_appender=lambda rows: None,
+            inventory_appender=inventory_rows.extend,
+        )
+
+        _, result = sheet.change_stock(
+            'outbound',
+            [StockChangeItem('FLT-001', 1)],
+            '/local-stock-outbound FLT-001 1',
+            'A',
+        )
+
+        self.assertIn('맞는 품목을 찾지 못했습니다', result)
+        self.assertEqual(stock_updates, [])
+        self.assertEqual(inventory_rows, [])
+
+    def test_inbound_includes_price_total_when_price_column_exists(self) -> None:
+        order_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+                ['BRK-001', 'Brake Pad', '10', '12000'],
+            ],
+            stock_writer=lambda updates: None,
+            order_appender=order_rows.extend,
+        )
+
+        _, result = sheet.change_stock(
+            'inbound',
+            [StockChangeItem('FLT-101', 3), StockChangeItem('BRK-001', 1)],
+            '/local-stock-inbound FLT-101 3, BRK-001 1',
+            'A',
+        )
+
+        self.assertIn('단가: 5,000원, 소계: 15,000원', result)
+        self.assertIn('단가: 12,000원, 소계: 12,000원', result)
+        self.assertIn('합계 금액: 27,000원', result)
+        self.assertEqual(order_rows[0][7], 15000)
+        self.assertEqual(order_rows[1][7], 12000)
+
+    def test_inbound_overwrites_existing_price_when_unit_price_given(
+        self,
+    ) -> None:
+        stock_updates = []
+        order_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '4500'],
+            ],
+            stock_writer=stock_updates.extend,
+            order_appender=order_rows.extend,
+        )
+
+        _, result = sheet.change_stock(
+            'inbound',
+            [StockChangeItem('FLT-101', 3, unit_price=5000)],
+            '/local-stock-inbound FLT-101 3',
+            'A',
+        )
+
+        self.assertIn('단가: 5,000원, 소계: 15,000원', result)
+        self.assertEqual(
+            stock_updates,
+            [StockCellUpdate(2, 3, 10), StockCellUpdate(2, 4, 5000)],
+        )
+        self.assertEqual(order_rows[0][7], 15000)
+
+    def test_inbound_new_row_includes_unit_price_when_given(self) -> None:
+        inventory_rows = []
+        order_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['BRK-001', 'Brake Pad', '28', '12000'],
+            ],
+            stock_writer=lambda updates: None,
+            order_appender=order_rows.extend,
+            inventory_appender=inventory_rows.extend,
+        )
+
+        _, result = sheet.change_stock(
+            'inbound',
+            [StockChangeItem('FLT-001', 5, unit_price=8000)],
+            '/local-stock-inbound FLT-001 5',
+            'A',
+        )
+
+        self.assertIn('단가: 8,000원, 소계: 40,000원', result)
+        self.assertEqual(len(inventory_rows), 1)
+        self.assertEqual(inventory_rows[0], ['', 'FLT-001', 5, 8000])
+        self.assertEqual(order_rows[0][7], 40000)
+
+    def test_inbound_prefers_item_unit_price_over_sheet_price(self) -> None:
+        order_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '4500'],
+            ],
+            stock_writer=lambda updates: None,
+            order_appender=order_rows.extend,
+        )
+
+        _, result = sheet.change_stock(
+            'inbound',
+            [StockChangeItem('FLT-101', 2, unit_price=5000)],
+            '/local-stock-inbound FLT-101 2',
+            'A',
+        )
+
+        self.assertIn('단가: 5,000원, 소계: 10,000원', result)
+        self.assertNotIn('단가: 4,500원', result)
+        self.assertEqual(order_rows[0][7], 10000)
+
+    def test_outbound_includes_price_total_when_price_column_exists(self) -> None:
+        order_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+                ['BRK-001', 'Brake Pad', '10', '12000'],
+            ],
+            stock_writer=lambda updates: None,
+            order_appender=order_rows.extend,
+        )
+
+        _, result = sheet.change_stock(
+            'outbound',
+            [StockChangeItem('FLT-101', 3), StockChangeItem('BRK-001', 1)],
+            '/local-stock-outbound FLT-101 3, BRK-001 1',
+            'A',
+        )
+
+        self.assertIn('출고 처리 완료: 2건', result)
+        self.assertIn('단가: 5,000원, 소계: 15,000원', result)
+        self.assertIn('단가: 12,000원, 소계: 12,000원', result)
+        self.assertIn('합계 금액: 27,000원', result)
+        self.assertEqual(order_rows[0][7], 15000)
+        self.assertEqual(order_rows[1][7], 12000)
+
+    def test_outbound_omits_price_total_when_price_missing(self) -> None:
+        order_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', ''],
+            ],
+            stock_writer=lambda updates: None,
+            order_appender=order_rows.extend,
+        )
+
+        _, result = sheet.change_stock(
+            'outbound',
+            [StockChangeItem('FLT-101', 1)],
+            '/local-stock-outbound FLT-101 1',
+            'A',
+        )
+
+        self.assertIn('출고 처리 완료: 1건', result)
+        self.assertNotIn('단가:', result)
+        self.assertNotIn('소계:', result)
+        self.assertNotIn('합계 금액:', result)
+        self.assertEqual(order_rows[0][7], '')
+
+    def test_rejects_location_header(self) -> None:
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                ['부품번호', '부품명', '수량', 'location'],
+                ['FLT-101', 'Oil Filter', '7', 'A-01'],
+            ],
+            stock_writer=lambda updates: None,
+            order_appender=lambda rows: None,
+        )
+
+        _, result = sheet.query('재고 알려줘')
+
+        self.assertIn('위치(location/위치) 열은 지원하지 않습니다', result)
+        self.assertIn("기대 헤더: ['부품번호', '부품명', '수량', '가격(원)']", result)
+        self.assertIn("현재 헤더: ['부품번호', '부품명', '수량', 'location']", result)
+
+    def test_rejects_korean_location_header(self) -> None:
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                ['부품번호', '부품명', '수량', '위치'],
+                ['FLT-101', 'Oil Filter', '7', '창고C'],
+            ],
+            stock_writer=lambda updates: None,
+            order_appender=lambda rows: None,
+        )
+
+        _, result = sheet.query('재고 알려줘')
+
+        self.assertIn('위치(location/위치) 열은 지원하지 않습니다', result)
+        self.assertIn("현재 헤더: ['부품번호', '부품명', '수량', '위치']", result)
+
+    def test_rejects_five_column_inventory_sheet(self) -> None:
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                [*INVENTORY_HEADERS, 'memo'],
+                ['FLT-101', 'Oil Filter', '7', '5000', '핫셀러'],
+            ],
+            stock_writer=lambda updates: None,
+            order_appender=lambda rows: None,
+        )
+
+        _, result = sheet.query('재고 알려줘')
+
+        self.assertIn('헤더 열 개수가 올바르지 않습니다', result)
+        self.assertIn("기대 헤더: ['부품번호', '부품명', '수량', '가격(원)']", result)
+        self.assertIn("현재 헤더: ['부품번호', '부품명', '수량', '가격(원)', 'memo']", result)
+
+    def test_order_row_length_matches_order_headers(self) -> None:
+        from parts_multiagent.google_sheet_inventory import ORDER_HEADERS
+
+        order_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+            ],
+            stock_writer=lambda updates: None,
+            order_appender=order_rows.extend,
+        )
+
+        sheet.change_stock(
+            'outbound',
+            [StockChangeItem('FLT-101', 1)],
+            '/local-stock-outbound FLT-101 1',
+            'A',
+        )
+
+        self.assertEqual(len(order_rows[0]), len(ORDER_HEADERS))
+
+    def test_update_rejects_multiple_matches_without_writing(self) -> None:
+        stock_updates = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+                ['FLT-101-A', 'Oil Filter Alt', '5', '5200'],
+            ],
+            stock_writer=stock_updates.extend,
+            order_appender=lambda rows: None,
+        )
+
+        _, result = sheet.change_stock(
+            'outbound',
+            [StockChangeItem('FLT-101', 1)],
+            '/local-stock-outbound FLT-101 1',
+            'A',
+        )
+
+        self.assertIn('여러 행이 매칭', result)
+        self.assertEqual(stock_updates, [])
 
 
 class PromptBuilderTest(unittest.TestCase):
@@ -105,14 +605,91 @@ class PromptBuilderTest(unittest.TestCase):
     def test_summary_prompt_uses_korean_labels(self) -> None:
         prompt = build_summary_prompt(
             query='재고 알려줘',
-            csv_context='Google Sheet: sheet-123/inventory',
-            raw_result='[sheet-123/inventory] 일치한 행 수: 1',
+            csv_context='Google Sheet: inventory',
+            raw_result='[inventory] 일치한 행 수: 1',
         )
 
         self.assertIn('사용자 질문:', prompt)
         self.assertIn('Google Sheets 컨텍스트:', prompt)
         self.assertIn('조회 결과:', prompt)
         self.assertIn('간결한 한국어 답변만 반환하세요', prompt)
+
+    def test_stock_inbound_extraction_prompt_includes_schema_and_peers(
+        self,
+    ) -> None:
+        prompt = build_stock_inbound_extraction_prompt(
+            query='B 창고에서 FLT-101 3개 가져와줘',
+            peer_agents=[
+                {'name': 'B', 'description': 'warehouse B'},
+                {'name': 'C', 'description': 'warehouse C'},
+            ],
+        )
+
+        self.assertIn('피어 에이전트:', prompt)
+        self.assertIn('사용자 요청:', prompt)
+        self.assertIn('"target_agent_name": "string|null"', prompt)
+        self.assertIn('"quantity": "integer"', prompt)
+        self.assertIn('"name": "B"', prompt)
+
+
+class StockInboundParserTest(unittest.TestCase):
+    def test_structured_payload_stays_structured(self) -> None:
+        request = parse_stock_inbound('B FLT-101 3, BRK-001 2')
+
+        self.assertEqual(request.agent_name, 'B')
+        self.assertEqual(request.raw_items, 'FLT-101 3, BRK-001 2')
+        self.assertEqual([item.part for item in request.items], ['FLT-101', 'BRK-001'])
+        self.assertFalse(request.needs_llm_extraction)
+
+    def test_natural_language_payload_marks_llm_fallback(self) -> None:
+        request = parse_stock_inbound('B 창고에서 FLT-101 3개 가져와줘')
+
+        self.assertIsNone(request.agent_name)
+        self.assertEqual(request.raw_query, 'B 창고에서 FLT-101 3개 가져와줘')
+        self.assertEqual(request.items, [])
+        self.assertTrue(request.needs_llm_extraction)
+
+
+class LocalLlmClientTest(unittest.IsolatedAsyncioTestCase):
+    async def test_extract_stock_inbound_parses_valid_json(self) -> None:
+        client = LocalLlmClient('http://localhost:11434/v1', 'test-model')
+
+        async def fake_chat(prompt: str, temperature: float) -> str:
+            self.assertIn('B 창고에서 FLT-101 3개 가져와줘', prompt)
+            self.assertEqual(temperature, 0)
+            return """
+            {
+              "target_agent_name": "B",
+              "items": [{"part": "FLT-101", "quantity": 3}],
+              "reason": "B 창고 요청"
+            }
+            """
+
+        client._chat = fake_chat  # type: ignore[method-assign]
+
+        result = await client.extract_stock_inbound(
+            'B 창고에서 FLT-101 3개 가져와줘',
+            [{'name': 'B', 'description': 'warehouse B'}],
+        )
+
+        self.assertEqual(result.target_agent_name, 'B')
+        self.assertEqual(len(result.items), 1)
+        self.assertEqual(result.items[0].part, 'FLT-101')
+        self.assertEqual(result.items[0].quantity, 3)
+
+    async def test_extract_stock_inbound_rejects_invalid_shape(self) -> None:
+        client = LocalLlmClient('http://localhost:11434/v1', 'test-model')
+
+        async def fake_chat(prompt: str, temperature: float) -> str:
+            return '{"target_agent_name":"B","items":"FLT-101 3","reason":"bad"}'
+
+        client._chat = fake_chat  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(ValueError, 'items는 배열이어야 합니다.'):
+            await client.extract_stock_inbound(
+                'B 창고에서 FLT-101 3개 가져와줘',
+                [{'name': 'B', 'description': 'warehouse B'}],
+            )
 
 
 if __name__ == '__main__':
