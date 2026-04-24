@@ -41,9 +41,10 @@ class GoogleSheetTable:
 
 @dataclass(frozen=True)
 class StockChangeItem:
-    part: str
-    quantity: int
-    unit_price: int | None = None
+    part: str  # 부품명
+    quantity: int  # 변경 수량
+    unit_price: int | None = None  # 단위 가격
+    part_code: str | None = None  # 부품 코드
 
 
 @dataclass(frozen=True)
@@ -69,12 +70,13 @@ class StockChange:
 
 @dataclass(frozen=True)
 class NewInventoryRow:
-    part: str
-    quantity: int
-    columns: list[str]
-    name_col: str
-    qty_col: str
-    unit_price: int | None = None
+    part: str  # 부품명
+    quantity: int  # 초기 수량
+    columns: list[str]  # 시트 열 목록
+    name_col: str  # 부품명 열
+    qty_col: str  # 수량 열
+    unit_price: int | None = None  # 단위 가격
+    part_code: str | None = None  # 부품 코드
 
 
 class GoogleSheetInventory:
@@ -370,6 +372,11 @@ class GoogleSheetInventory:
         row: list[object] = [''] * len(nr.columns)
         row[nr.columns.index(nr.name_col)] = nr.part
         row[nr.columns.index(nr.qty_col)] = nr.quantity
+        if nr.part_code is not None:
+            name_cols = list(self.config.inventory_headers[:2])
+            if len(name_cols) >= 2:
+                part_code_col = name_cols[0]
+                row[nr.columns.index(part_code_col)] = nr.part_code
         price_col_index = self._price_column_index()
         if nr.unit_price is not None and price_col_index is not None:
             row[price_col_index] = nr.unit_price
@@ -415,6 +422,7 @@ class GoogleSheetInventory:
                     name_col=name_cols[1],
                     qty_col=qty_col,
                     unit_price=item.unit_price,
+                    part_code=item.part_code,
                 ))
                 changes.append(StockChange(
                     part=item.part,

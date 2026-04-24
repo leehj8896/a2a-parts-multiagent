@@ -11,7 +11,11 @@ import httpx
 
 from .config import DEFAULT_SKILL_ID
 from .constants.routing import build_route_prompt
+from .constants.stock_inbound_extraction import (
+    build_stock_inbound_extraction_prompt,
+)
 from .constants.summarizing import build_summary_prompt
+from .stock_inbound.types import ExtractedStockItem, StockInboundExtraction
 
 
 logger = logging.getLogger(__name__)
@@ -102,6 +106,51 @@ class LocalLlmClient:
                 exc,
             )
             return raw_result
+
+    async def extract_stock_inbound(
+        self,
+        query: str,
+        peer_agents: list[dict[str, Any]],
+    ) -> StockInboundExtraction:
+        prompt = build_stock_inbound_extraction_prompt(query, peer_agents)
+        _log_llm_block('LLM 입고 추출 프롬프트', prompt)
+        content = await self._chat(prompt, temperature=0)
+        _log_llm_block('LLM 입고 추출 응답', content)
+        raw = self._extract_json(content)
+
+        target_agent_name = raw.get('target_agent_name')
+        if target_agent_name is not None and not isinstance(
+            target_agent_name, str
+        ):
+            raise ValueError('target_agent_name은 문자열 또는 null이어야 합니다.')
+
+        raw_items = raw.get('items')
+        if not isinstance(raw_items, list):
+            raise ValueError('items는 배열이어야 합니다.')
+
+        items: list[ExtractedStockItem] = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                raise ValueError('items 배열 요소는 객체여야 합니다.')
+            part = raw_item.get('part')
+            quantity = raw_item.get('quantity')
+            if not isinstance(part, str) or not part.strip():
+                raise ValueError('part는 비어 있지 않은 문자열이어야 합니다.')
+            if not isinstance(quantity, int):
+                raise ValueError('quantity는 정수여야 합니다.')
+            items.append(
+                ExtractedStockItem(part=part.strip(), quantity=quantity)
+            )
+
+        reason = raw.get('reason') or ''
+        if not isinstance(reason, str):
+            raise ValueError('reason은 문자열이어야 합니다.')
+
+        return StockInboundExtraction(
+            target_agent_name=target_agent_name,
+            items=items,
+            reason=reason.strip(),
+        )
 
     async def _chat(self, prompt: str, temperature: float) -> str:
         payload = {
