@@ -1,9 +1,30 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from dataclasses import dataclass
 from urllib.parse import urlparse
+
+from dotenv import dotenv_values, load_dotenv
+
+
+def load_agent_dotenv() -> None:
+    original_env = dict(os.environ)
+    load_dotenv()
+
+    agent_name = os.getenv('AGENT_NAME')
+    if not agent_name:
+        return
+
+    agent_env_path = Path(f'.env.{agent_name.lower()}')
+    if not agent_env_path.exists():
+        return
+
+    for key, value in dotenv_values(agent_env_path).items():
+        if value is None or key in original_env:
+            continue
+        os.environ[key] = value
 
 
 DEFAULT_LLM_BASE_URL = 'http://joonyy-synology:26414/v1'
@@ -85,11 +106,11 @@ def load_config() -> PartsAgentConfig:
             ),
             spreadsheet_id=_required_env('GOOGLE_SHEET_ID'),
             inventory_worksheet=os.getenv(
-                'GOOGLE_SHEET_INVENTORY_WORKSHEET',
+                'GOOGLE_INVENTORY_WORKSHEET',
                 DEFAULT_GOOGLE_SHEET_INVENTORY_WORKSHEET,
             ),
             order_worksheet=os.getenv(
-                'GOOGLE_SHEET_ORDER_WORKSHEET',
+                'GOOGLE_ORDER_WORKSHEET',
                 DEFAULT_GOOGLE_SHEET_ORDER_WORKSHEET,
             ),
             inventory_headers=tuple(

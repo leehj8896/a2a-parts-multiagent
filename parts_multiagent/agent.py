@@ -3,16 +3,19 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from .command_registry import COMMANDS
 from .config import PartsAgentConfig
-from .constants.prefixes import LOCAL_AGENT_PREFIX, PEER_AGENTS_PREFIX
+from .constants.prefixes import (
+    INVENTORY_LOOKUP_LOCAL_PREFIX,
+)
+from .constants.structured_payload_keys import QUERY
 from .google_sheet_inventory import GoogleSheetConfig, GoogleSheetInventory
 from .inventory_log import log_inventory_response
-from .llm_client import LocalLlmClient
 from .peer_client import PeerDirectory
+from .structured_requests import build_request_from_payload
 
 
 logger = logging.getLogger(__name__)
-EMPTY_QUERY_MESSAGE = '조회할 질문을 입력해주세요.'
 
 
 class PartsMultiAgent:
@@ -29,42 +32,28 @@ class PartsMultiAgent:
                 inventory_headers=config.google_sheet.inventory_headers,
             )
         )
-        self.llm = LocalLlmClient(config.llm_base_url, config.llm_model)
         self.peers = PeerDirectory(
             config.peer_agent_urls, config.agent_name
         )
 
-    async def invoke(self, query: str) -> str:
-        query = query.strip()
-        local_task = self._task_from_prefix(query, LOCAL_AGENT_PREFIX)
-        if local_task is not None:
-            if not local_task:
-                return EMPTY_QUERY_MESSAGE
-            return await self._query_local(local_task, local_task)
+    # 구조화 요청(DataPart)의 path/payload로 명령을 해석해 실행합니다.
+    async def invoke_structured(self, path: str, payload: dict[str, object]) -> str:
+        # path에서 "/" prefix 제거하고 skill_id로 조회
+        skill_id = path.lstrip('/')
+        command = COMMANDS.get(skill_id)
+        if command is None:
+            return f'지원하지 않는 요청입니다: {path}'
 
-        peer_task = self._task_from_prefix(query, PEER_AGENTS_PREFIX)
-        if peer_task is not None:
-            if not peer_task:
-                return EMPTY_QUERY_MESSAGE
-            peer_errors = await self.peers.refresh()
-            return await self._query_peer_agents(peer_task, peer_errors)
+        try:
+            request = build_request_from_payload(skill_id, payload)
+        except Exception as exc:
+            return f'구조화 요청 해석 실패: {type(exc).__name__}: {exc}'
 
-        if not query:
-            return EMPTY_QUERY_MESSAGE
+        response = await command.handler(self, request)
+        return str(response)
 
-        return await self._query_local_and_peer_agents(query, query)
-
-    async def _query_local_and_peer_agents(
-        self,
-        query: str,
-        task: str,
-    ) -> str:
-        local_section = await self._query_local_agent_section(query, task)
-        peer_errors = await self.peers.refresh()
-        peer_section = await self._query_peer_agents(task, peer_errors)
-        return f'## 내 agent 조회\n\n{local_section}\n\n{peer_section}'
-
-    async def _query_peer_agents(
+    # 피어 에이전트들에게 구조화 요청을 병렬로 전송하고 결과를 합쳐 반환합니다.
+    async def query_peer_agents(
         self,
         task: str,
         peer_errors: list[str],
@@ -78,8 +67,10 @@ class PartsMultiAgent:
 
         peer_results = await asyncio.gather(
             *[
-                self.peers.send_message(
-                    peer_name, self._peer_local_message(task)
+                self.peers.send_structured_message(
+                    peer_name,
+                    INVENTORY_LOOKUP_LOCAL_PREFIX,
+                    {QUERY: task},
                 )
                 for peer_name in peer_names
             ],
@@ -105,41 +96,10 @@ class PartsMultiAgent:
             )
             sections.append(f'[{peer_name}] 응답입니다.\n\n{peer_result}')
 
-        answer = f'## 다른 agent 조회\n\n' + '\n\n'.join(sections)
+        answer = '## 다른 agent 조회\n\n' + '\n\n'.join(sections)
         if peer_errors:
             answer = self._append_peer_errors(answer, peer_errors)
         return answer
-
-    async def _query_local_agent_section(self, query: str, task: str) -> str:
-        try:
-            local_result = await self._query_local(query, task)
-        except Exception as exc:
-            return (
-                f'[{self.config.agent_name}] 요청 실패: '
-                f'{type(exc).__name__}: {exc}'
-            )
-        return f'[{self.config.agent_name}] 응답입니다.\n\n{local_result}'
-
-    async def _query_local(self, query: str, task: str) -> str:
-        context, raw_result = self.inventory.query(task)
-        log_inventory_response(
-            logger=logger,
-            local_agent=self.config.agent_name,
-            source_agent=self.config.agent_name,
-            query=task,
-            response=raw_result,
-        )
-        return await self.llm.summarize_answer(query, context, raw_result)
-
-    def _peer_local_message(self, task: str) -> str:
-        return f'{LOCAL_AGENT_PREFIX} {task}'
-
-    def _task_from_prefix(self, query: str, prefix: str) -> str | None:
-        if query == prefix:
-            return ''
-        if query.startswith(prefix) and query[len(prefix)].isspace():
-            return query[len(prefix) :].strip()
-        return None
 
     def _append_peer_errors(self, answer: str, peer_errors: list[str]) -> str:
         return (

@@ -1,8 +1,6 @@
-from __future__ import annotations
+from parts_multiagent.domain.peer_inventory_query.types.response import (
+    PeerInventoryQueryResponse,
+)
 
-from dataclasses import dataclass
+__all__ = ['PeerInventoryQueryResponse']
 
-
-@dataclass(frozen=True)
-class PeerInventoryQueryResponse:
-    text: str

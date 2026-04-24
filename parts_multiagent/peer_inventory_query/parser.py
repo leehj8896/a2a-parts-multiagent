@@ -1,7 +1,4 @@
-from __future__ import annotations
+from parts_multiagent.domain.peer_inventory_query.parser import parse
 
-from .request import PeerInventoryQueryRequest
+__all__ = ['parse']
 
-
-def parse(payload: str) -> PeerInventoryQueryRequest:
-    return PeerInventoryQueryRequest(query=payload.strip())

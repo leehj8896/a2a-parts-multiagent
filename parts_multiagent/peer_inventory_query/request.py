@@ -1,8 +1,6 @@
-from __future__ import annotations
+from parts_multiagent.domain.peer_inventory_query.types.request import (
+    PeerInventoryQueryRequest,
+)
 
-from dataclasses import dataclass
+__all__ = ['PeerInventoryQueryRequest']
 
-
-@dataclass(frozen=True)
-class PeerInventoryQueryRequest:
-    query: str

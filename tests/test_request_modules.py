@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 
-PREFIX_MODULES = (
+REQUEST_MODULES = (
     'local_inventory_query',
     'peer_inventory_query',
     'stock_inbound',
@@ -17,10 +17,10 @@ PREFIX_MODULES = (
 
 
 class RequestModuleStructureTest(unittest.TestCase):
-    def test_prefix_modules_live_under_parts_multiagent_root(self) -> None:
+    def test_request_modules_live_under_parts_multiagent_root(self) -> None:
         root = Path(__file__).resolve().parents[1] / 'parts_multiagent'
 
-        for module_name in PREFIX_MODULES:
+        for module_name in REQUEST_MODULES:
             with self.subTest(module_name=module_name):
                 module_dir = root / module_name
                 self.assertTrue(module_dir.is_dir())
@@ -33,8 +33,8 @@ class RequestModuleStructureTest(unittest.TestCase):
                 ):
                     self.assertTrue((module_dir / file_name).is_file())
 
-    def test_prefix_modules_export_parse_and_handle(self) -> None:
-        for module_name in PREFIX_MODULES:
+    def test_request_modules_export_parse_and_handle(self) -> None:
+        for module_name in REQUEST_MODULES:
             with self.subTest(module_name=module_name):
                 module = importlib.import_module(
                     f'parts_multiagent.{module_name}'

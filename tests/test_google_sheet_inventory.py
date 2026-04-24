@@ -2,19 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from parts_multiagent.constants.stock_inbound_extraction import (
-    build_stock_inbound_extraction_prompt,
-)
 from parts_multiagent.google_sheet_inventory import (
     GoogleSheetConfig,
     GoogleSheetInventory,
     StockCellUpdate,
     StockChangeItem,
 )
-from parts_multiagent.constants.routing import build_route_prompt
-from parts_multiagent.constants.summarizing import build_summary_prompt
-from parts_multiagent.llm_client import LocalLlmClient
-from parts_multiagent.stock_inbound.parser import parse as parse_stock_inbound
+from parts_multiagent.stock_inbound import parse as parse_stock_inbound
 
 
 INVENTORY_HEADERS = ['부품번호', '부품명', '수량', '가격(원)']
@@ -585,53 +579,6 @@ class GoogleSheetInventoryTest(unittest.TestCase):
         self.assertEqual(stock_updates, [])
 
 
-class PromptBuilderTest(unittest.TestCase):
-    def test_route_prompt_uses_korean_labels_and_keeps_schema_keys(
-        self,
-    ) -> None:
-        prompt = build_route_prompt(
-            query='A 창고 FLT-101 재고 알려줘',
-            local_agent={'name': 'A'},
-            peer_agents=[{'name': 'B'}],
-            skill_id='inventory',
-        )
-
-        self.assertIn('로컬 에이전트:', prompt)
-        self.assertIn('피어 에이전트:', prompt)
-        self.assertIn('사용자 질문:', prompt)
-        self.assertIn('"route": "local|remote"', prompt)
-        self.assertIn('"target_agent_name": "string|null"', prompt)
-
-    def test_summary_prompt_uses_korean_labels(self) -> None:
-        prompt = build_summary_prompt(
-            query='재고 알려줘',
-            csv_context='Google Sheet: inventory',
-            raw_result='[inventory] 일치한 행 수: 1',
-        )
-
-        self.assertIn('사용자 질문:', prompt)
-        self.assertIn('Google Sheets 컨텍스트:', prompt)
-        self.assertIn('조회 결과:', prompt)
-        self.assertIn('간결한 한국어 답변만 반환하세요', prompt)
-
-    def test_stock_inbound_extraction_prompt_includes_schema_and_peers(
-        self,
-    ) -> None:
-        prompt = build_stock_inbound_extraction_prompt(
-            query='B 창고에서 FLT-101 3개 가져와줘',
-            peer_agents=[
-                {'name': 'B', 'description': 'warehouse B'},
-                {'name': 'C', 'description': 'warehouse C'},
-            ],
-        )
-
-        self.assertIn('피어 에이전트:', prompt)
-        self.assertIn('사용자 요청:', prompt)
-        self.assertIn('"target_agent_name": "string|null"', prompt)
-        self.assertIn('"quantity": "integer"', prompt)
-        self.assertIn('"name": "B"', prompt)
-
-
 class StockInboundParserTest(unittest.TestCase):
     def test_structured_payload_stays_structured(self) -> None:
         request = parse_stock_inbound('B FLT-101 3, BRK-001 2')
@@ -639,57 +586,6 @@ class StockInboundParserTest(unittest.TestCase):
         self.assertEqual(request.agent_name, 'B')
         self.assertEqual(request.raw_items, 'FLT-101 3, BRK-001 2')
         self.assertEqual([item.part for item in request.items], ['FLT-101', 'BRK-001'])
-        self.assertFalse(request.needs_llm_extraction)
-
-    def test_natural_language_payload_marks_llm_fallback(self) -> None:
-        request = parse_stock_inbound('B 창고에서 FLT-101 3개 가져와줘')
-
-        self.assertIsNone(request.agent_name)
-        self.assertEqual(request.raw_query, 'B 창고에서 FLT-101 3개 가져와줘')
-        self.assertEqual(request.items, [])
-        self.assertTrue(request.needs_llm_extraction)
-
-
-class LocalLlmClientTest(unittest.IsolatedAsyncioTestCase):
-    async def test_extract_stock_inbound_parses_valid_json(self) -> None:
-        client = LocalLlmClient('http://localhost:11434/v1', 'test-model')
-
-        async def fake_chat(prompt: str, temperature: float) -> str:
-            self.assertIn('B 창고에서 FLT-101 3개 가져와줘', prompt)
-            self.assertEqual(temperature, 0)
-            return """
-            {
-              "target_agent_name": "B",
-              "items": [{"part": "FLT-101", "quantity": 3}],
-              "reason": "B 창고 요청"
-            }
-            """
-
-        client._chat = fake_chat  # type: ignore[method-assign]
-
-        result = await client.extract_stock_inbound(
-            'B 창고에서 FLT-101 3개 가져와줘',
-            [{'name': 'B', 'description': 'warehouse B'}],
-        )
-
-        self.assertEqual(result.target_agent_name, 'B')
-        self.assertEqual(len(result.items), 1)
-        self.assertEqual(result.items[0].part, 'FLT-101')
-        self.assertEqual(result.items[0].quantity, 3)
-
-    async def test_extract_stock_inbound_rejects_invalid_shape(self) -> None:
-        client = LocalLlmClient('http://localhost:11434/v1', 'test-model')
-
-        async def fake_chat(prompt: str, temperature: float) -> str:
-            return '{"target_agent_name":"B","items":"FLT-101 3","reason":"bad"}'
-
-        client._chat = fake_chat  # type: ignore[method-assign]
-
-        with self.assertRaisesRegex(ValueError, 'items는 배열이어야 합니다.'):
-            await client.extract_stock_inbound(
-                'B 창고에서 FLT-101 3개 가져와줘',
-                [{'name': 'B', 'description': 'warehouse B'}],
-            )
 
 
 if __name__ == '__main__':

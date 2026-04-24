@@ -1,8 +1,6 @@
-from __future__ import annotations
+from parts_multiagent.domain.local_inventory_query.types.response import (
+    LocalInventoryQueryResponse,
+)
 
-from dataclasses import dataclass
+__all__ = ['LocalInventoryQueryResponse']
 
-
-@dataclass(frozen=True)
-class LocalInventoryQueryResponse:
-    text: str

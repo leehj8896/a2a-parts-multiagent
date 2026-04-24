@@ -1,0 +1,160 @@
+{
+  "additionalInterfaces": null,
+  "capabilities": {
+    "extensions": null,
+    "pushNotifications": null,
+    "stateTransitionHistory": null,
+    "streaming": true
+  },
+  "defaultInputModes": [
+    "text",
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "description": "Warehouse C inventory agent.",
+  "documentationUrl": null,
+  "iconUrl": null,
+  "name": "C",
+  "preferredTransport": "JSONRPC",
+  "protocolVersion": "0.3.0",
+  "provider": null,
+  "security": null,
+  "securitySchemes": null,
+  "signatures": null,
+  "skills": [
+    {
+      "description": "이 에이전트의 로컬 재고를 조회합니다.",
+      "examples": [
+        "부품 IC-2020",
+        "STARTMTR01"
+      ],
+      "id": "재고조회",
+      "inputModes": [
+        "text",
+        "application/json"
+      ],
+      "name": "로컬 재고 조회",
+      "outputModes": [
+        "application/json"
+      ],
+      "security": null,
+      "tags": [
+        "inventory",
+        "local"
+      ]
+    },
+    {
+      "description": "다른 피어 에이전트들의 재고를 조회합니다.",
+      "examples": [
+        "부품명",
+        "IC-2020"
+      ],
+      "id": "전국재고조회",
+      "inputModes": [
+        "text",
+        "application/json"
+      ],
+      "name": "피어 에이전트 재고 조회",
+      "outputModes": [
+        "application/json"
+      ],
+      "security": null,
+      "tags": [
+        "inventory",
+        "peers"
+      ]
+    },
+    {
+      "description": "사용자 앱이 로컬 에이전트에 피어 출고를 요청하여 부품을 주문합니다.",
+      "examples": [
+        "부품명 10개",
+        "IC-2020 5개, R-100k 50"
+      ],
+      "id": "주문하기",
+      "inputModes": [
+        "text",
+        "application/json"
+      ],
+      "name": "피어 출고 요청하여 주문하기",
+      "outputModes": [
+        "application/json"
+      ],
+      "security": null,
+      "tags": [
+        "stock",
+        "inbound",
+        "local"
+      ]
+    },
+    {
+      "description": "로컬 재고에서 부품을 출고합니다.",
+      "examples": [
+        "부품명 5개",
+        "IC-2020 1개"
+      ],
+      "id": "출고하기",
+      "inputModes": [
+        "text",
+        "application/json"
+      ],
+      "name": "로컬 재고 출고",
+      "outputModes": [
+        "application/json"
+      ],
+      "security": null,
+      "tags": [
+        "stock",
+        "outbound",
+        "local"
+      ]
+    },
+    {
+      "description": "다른 피어 에이전트에 재고 입고를 요청합니다.",
+      "examples": [
+        "{\"agent_name\": \"B\", \"raw_items\": \"부품 10개\"}"
+      ],
+      "id": "피어입고요청하기",
+      "inputModes": [
+        "text",
+        "application/json"
+      ],
+      "name": "피어 재고 입고",
+      "outputModes": [
+        "application/json"
+      ],
+      "security": null,
+      "tags": [
+        "stock",
+        "inbound",
+        "peer"
+      ]
+    },
+    {
+      "description": "로컬 에이전트가 다른 피어 에이전트에 재고 출고를 요청하고 부품을 주문합니다.",
+      "examples": [
+        "{\"agent_name\": \"B\", \"raw_items\": \"부품 5개\"}",
+        "B 판매점에 STARTMTR01 1개 주문"
+      ],
+      "id": "피어출고요청하기",
+      "inputModes": [
+        "text",
+        "application/json"
+      ],
+      "name": "다른 에이전트에 출고요청 및 주문하기",
+      "outputModes": [
+        "application/json"
+      ],
+      "security": null,
+      "tags": [
+        "stock",
+        "outbound",
+        "peer"
+      ]
+    }
+  ],
+  "supportsAuthenticatedExtendedCard": null,
+  "url": "http://localhost:10003",
+  "version": "1.0.0"
+}

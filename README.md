@@ -90,27 +90,32 @@ AGENT_NAME=C uv run python -m parts_multiagent
 uv run python test_client.py --url http://localhost:10001 "FLT-101 재고 알려줘"
 ```
 
-내 agent만 조회:
+구조화 요청(DataPart)로 보내기:
 
 ```bash
-uv run python test_client.py --url http://localhost:10001 "/local FLT-101 재고 알려줘"
+uv run python test_client.py --url http://localhost:10001 --structured \
+  '{"path": "/재고조회", "payload": {"query": "FLT-101 재고 알려줘"}}'
 ```
 
-나를 제외한 다른 agent들만 조회:
+피어 agent들만 조회(구조화 요청):
 
 ```bash
-uv run python test_client.py --url http://localhost:10001 "/peers FLT-101 재고 알려줘"
+uv run python test_client.py --url http://localhost:10001 --structured \
+  '{"path": "/전국재고조회", "payload": {"query": "FLT-101 재고 알려줘"}}'
 ```
 
 라우팅 동작:
 
+- 참고: 기존 `/local`, `/peers` prefix는 제거되었습니다.
 - 접두어 없는 요청은 수신 에이전트 자신의 Google Sheet를 조회한 뒤, 나를 제외한
   다른 피어 에이전트들을 조회하고 `내 agent 조회`와 `다른 agent 조회` 섹션으로
   분리해 반환합니다.
-- `/local <질문>` 요청은 수신 에이전트 자신의 Google Sheet만 조회합니다.
-- `/peers <질문>` 요청은 나를 제외한 다른 피어 에이전트들만 조회합니다.
-- 피어 에이전트에 전달되는 요청은 `/local <질문>` 형태이므로 피어가 다시 다른
-  에이전트로 재전파하지 않습니다.
+- 슬래시(prefix) 기반 텍스트 요청은 지원하지 않습니다. 명령은 구조화 요청(DataPart)의
+  `path`/`payload`로 보내야 합니다.
+- `path="/재고조회"` 구조화 요청은 수신 에이전트 자신의 Google Sheet만 조회합니다.
+- `path="/전국재고조회"` 구조화 요청은 나를 제외한 다른 피어 에이전트들만 조회합니다.
+- 피어 에이전트에 전달되는 요청은 `path="/재고조회"` 형태이므로 피어가
+  다시 다른 에이전트로 재전파하지 않습니다.
 - 일부 피어 AgentCard 또는 피어 요청이 실패해도 가능한 결과는 반환되며, 응답에
   실패 세부 정보가 포함됩니다.
 

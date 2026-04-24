@@ -1,8 +1,6 @@
-from __future__ import annotations
+from parts_multiagent.domain.peer_stock_outbound.types.response import (
+    PeerStockOutboundResponse,
+)
 
-from dataclasses import dataclass
+__all__ = ['PeerStockOutboundResponse']
 
-
-@dataclass(frozen=True)
-class PeerStockOutboundResponse:
-    text: str

@@ -9,10 +9,12 @@ from a2a.types import (
     TaskStatusUpdateEvent,
 )
 from a2a.utils import new_agent_text_message
+from a2a.utils.parts import get_data_parts
 from a2a.utils.artifact import new_text_artifact
 from a2a.utils.task import new_task
 
 from .agent import PartsMultiAgent
+from .constants.structured_payload_keys import PATH, PAYLOAD
 from .config import PartsAgentConfig
 
 
@@ -41,8 +43,18 @@ class PartsMultiAgentExecutor(AgentExecutor):
             )
         )
 
-        query = context.get_user_input()
-        result = await self.agent.invoke(query)
+        result = ''
+        message = context.message
+        if message is not None:
+            for data in get_data_parts(message.parts):
+                path = data.get(PATH)
+                payload = data.get(PAYLOAD)
+                if isinstance(path, str) and isinstance(payload, dict):
+                    result = await self.agent.invoke_structured(path, payload)
+                    break
+
+        if not result:
+            result = 'DataPart(application/json) 형식만 지원합니다.'
 
         await event_queue.enqueue_event(
             TaskArtifactUpdateEvent(

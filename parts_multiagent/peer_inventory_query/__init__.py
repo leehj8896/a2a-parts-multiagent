@@ -1,7 +1,11 @@
-from .handler import handle
-from .parser import parse
-from .request import PeerInventoryQueryRequest
-from .response import PeerInventoryQueryResponse
+from parts_multiagent.domain.inventory_lookup_peers.handler import handle
+from parts_multiagent.domain.inventory_lookup_peers.parser import parse
+from parts_multiagent.domain.inventory_lookup_peers.types.request import (
+    PeerInventoryQueryRequest,
+)
+from parts_multiagent.domain.inventory_lookup_peers.types.response import (
+    PeerInventoryQueryResponse,
+)
 
 __all__ = [
     'PeerInventoryQueryRequest',

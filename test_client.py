@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from typing import Any
 from uuid import uuid4
@@ -10,25 +11,46 @@ import httpx
 
 from a2a.client import A2AClient, A2ACardResolver
 from a2a.types import (
+    DataPart,
+    Message,
+    MessageSendConfiguration,
     MessageSendParams,
+    Part,
+    Role,
     SendMessageRequest,
     SendMessageSuccessResponse,
     Task,
 )
+from parts_multiagent.constants.structured_payload_keys import PATH, PAYLOAD
 
 
+# 구조화 요청(DataPart)으로 A2A SendMessageRequest를 구성합니다.
 def create_request(text: str) -> SendMessageRequest:
     message_id = uuid4().hex
-    payload = {
-        'message': {
-            'role': 'user',
-            'parts': [{'type': 'text', 'text': text}],
-            'messageId': message_id,
-        },
-        'configuration': {'acceptedOutputModes': ['text']},
-    }
+    envelope = json.loads(text)
+    if not isinstance(envelope, dict):
+        raise ValueError('구조화 요청은 JSON object여야 합니다.')
+    path = envelope.get(PATH)
+    payload = envelope.get(PAYLOAD)
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError(f'`{PATH}`는 비어있지 않은 문자열이어야 합니다.')
+    if not isinstance(payload, dict):
+        raise ValueError(f'`{PAYLOAD}`는 JSON object여야 합니다.')
+
+    normalized = {PATH: path.strip(), PAYLOAD: payload}
+    parts = [Part(root=DataPart(data=normalized))]
+
+    params = MessageSendParams(
+        message=Message(
+            role=Role.user,
+            parts=parts,
+            message_id=message_id,
+        ),
+        configuration=MessageSendConfiguration(accepted_output_modes=['application/json']),
+    )
     return SendMessageRequest(
-        id=message_id, params=MessageSendParams.model_validate(payload)
+        id=message_id,
+        params=params,
     )
 
 
@@ -57,7 +79,8 @@ async def send(base_url: str, text: str) -> str:
     async with httpx.AsyncClient(timeout=60) as client:
         card = await A2ACardResolver(client, base_url).get_agent_card()
         a2a_client = A2AClient(client, card, url=base_url)
-        response = await a2a_client.send_message(create_request(text))
+        request = create_request(text)
+        response = await a2a_client.send_message(request)
 
     if not isinstance(response.root, SendMessageSuccessResponse):
         return response.model_dump_json(indent=2)
@@ -71,7 +94,10 @@ async def send(base_url: str, text: str) -> str:
 @click.option('--url', 'base_url', default='http://localhost:10001')
 @click.argument('text')
 def main(base_url: str, text: str) -> None:
-    print(asyncio.run(send(base_url, text)))
+    try:
+        print(asyncio.run(send(base_url, text)))
+    except Exception as exc:
+        raise click.BadParameter(str(exc)) from exc
 
 
 if __name__ == '__main__':

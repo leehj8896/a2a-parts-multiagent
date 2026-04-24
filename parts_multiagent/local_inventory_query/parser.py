@@ -1,7 +1,4 @@
-from __future__ import annotations
+from parts_multiagent.domain.local_inventory_query.parser import parse
 
-from .request import LocalInventoryQueryRequest
+__all__ = ['parse']
 
-
-def parse(payload: str) -> LocalInventoryQueryRequest:
-    return LocalInventoryQueryRequest(query=payload.strip())

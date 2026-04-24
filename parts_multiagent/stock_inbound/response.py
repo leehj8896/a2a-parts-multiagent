@@ -1,8 +1,6 @@
-from __future__ import annotations
+from parts_multiagent.domain.stock_inbound.types.response import (
+    StockInboundResponse,
+)
 
-from dataclasses import dataclass
+__all__ = ['StockInboundResponse']
 
-
-@dataclass(frozen=True)
-class StockInboundResponse:
-    text: str

@@ -1,11 +1,4 @@
-from __future__ import annotations
+from parts_multiagent.domain.stock_outbound.types.request import StockOutboundRequest
 
-from dataclasses import dataclass
+__all__ = ['StockOutboundRequest']
 
-from parts_multiagent.google_sheet_inventory import StockChangeItem
-
-
-@dataclass(frozen=True)
-class StockOutboundRequest:
-    raw_items: str
-    items: list[StockChangeItem]

@@ -1,12 +1,6 @@
-from __future__ import annotations
+from parts_multiagent.domain.peer_stock_inbound.types.request import (
+    PeerStockInboundRequest,
+)
 
-from dataclasses import dataclass
+__all__ = ['PeerStockInboundRequest']
 
-from parts_multiagent.google_sheet_inventory import StockChangeItem
-
-
-@dataclass(frozen=True)
-class PeerStockInboundRequest:
-    agent_name: str
-    raw_items: str
-    items: list[StockChangeItem]
