@@ -18,7 +18,6 @@ def parse(payload: str) -> StockInboundRequest:
     except ValueError as exc:
         raise ValueError(STOCK_INBOUND_PARSE_ERROR) from exc
     return StockInboundRequest(
-        target_agent=None,
         raw_items=payload,
         items=items,
     )

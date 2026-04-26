@@ -14,11 +14,28 @@ from parts_multiagent.domain.inventory.constants.gspread_batch_update_keys impor
     RANGE,
     VALUES,
 )
+from parts_multiagent.domain.inventory.constants.order_statuses import (
+    ORDER_STATUS_PAYMENT_PENDING,
+    ORDER_STATUS_SUCCESS,
+)
+from parts_multiagent.domain.inventory.constants.order_worksheet_headers import (
+    ORDER_DIRECTION_INBOUND,
+    ORDER_DIRECTION_OUTBOUND,
+    ORDER_HEADER_AFTER_STOCK,
+    ORDER_HEADER_AGENT_NAME,
+    ORDER_HEADER_BEFORE_STOCK,
+    ORDER_HEADER_DIRECTION,
+    ORDER_HEADER_ORDER_ID,
+    ORDER_HEADER_PART_CODE,
+    ORDER_HEADER_PRICE,
+    ORDER_HEADER_QUANTITY,
+    ORDER_HEADER_RECORDED_AT,
+    ORDER_HEADER_REQUEST_TEXT,
+    ORDER_HEADER_STATUS,
+)
 
 UNSUPPORTED_LOCATION_HEADERS = ('location', '위치')
 GoogleSheetConfig = GoogleSheetSettings
-ORDER_STATUS_SUCCESS = '성공'
-ORDER_STATUS_PAYMENT_PENDING = '결제대기'
 
 
 @dataclass(frozen=True)
@@ -76,12 +93,16 @@ class GoogleSheetInventory:
         stock_writer: Callable[[list[StockCellUpdate]], None] | None = None,
         order_appender: Callable[[list[list[object]]], None] | None = None,
         inventory_appender: Callable[[list[list[object]]], None] | None = None,
+        order_values_loader: Callable[[], list[list[object]]] | None = None,
+        order_status_writer: Callable[[list[dict[str, object]]], None] | None = None,
     ) -> None:
         self.config = config
         self._values_loader = values_loader
         self._stock_writer = stock_writer
         self._order_appender = order_appender
         self._inventory_appender = inventory_appender
+        self._order_values_loader = order_values_loader
+        self._order_status_writer = order_status_writer
 
     def describe(self, table: GoogleSheetTable | None = None) -> str:
         if table is None:
@@ -325,6 +346,190 @@ class GoogleSheetInventory:
             lines.append(f'합계 금액: {total_amount:,}원')
         return context, '\n'.join(lines), order_id
 
+    # 주문선택 성공 시 로컬 주문 워크시트에 결제대기(입고) 행을 저장합니다.
+    def register_local_pending_inbound_order(
+        self,
+        order_id: str,
+        items: list[StockChangeItem],
+        request_text: str,
+        agent_name: str,
+    ) -> tuple[bool, str]:
+        if not order_id or not order_id.strip():
+            return False, '로컬 결제대기 주문 저장 실패: 주문번호가 비어있습니다.'
+
+        try:
+            table = self._load_table()
+        except Exception as exc:
+            return (
+                False,
+                f'로컬 결제대기 주문 저장 실패: '
+                f'Google Sheet를 조회하지 못했습니다: {type(exc).__name__}: {exc}',
+            )
+
+        if table.frame.empty:
+            return False, (
+                f'로컬 결제대기 주문 저장 실패: '
+                f'{table.source}에서 주문할 재고 행을 찾지 못했습니다.'
+            )
+        if not items:
+            return False, '로컬 결제대기 주문 저장 실패: 주문할 품목과 수량을 입력해주세요.'
+
+        changes, _, error = self._build_stock_changes(table, 'inbound', items)
+        if error is not None:
+            return False, f'로컬 결제대기 주문 저장 실패: {error}'
+
+        order_rows = [
+            self._order_row(
+                direction='inbound',
+                request_text=request_text,
+                agent_name=agent_name,
+                change=change,
+                status=ORDER_STATUS_PAYMENT_PENDING,
+                order_id=order_id.strip(),
+            )
+            for change in changes
+        ]
+        try:
+            self._append_order_rows(order_rows)
+        except Exception as exc:
+            return (
+                False,
+                f'로컬 결제대기 주문 저장 실패: '
+                f'Google Sheet를 업데이트하지 못했습니다: {type(exc).__name__}: {exc}',
+            )
+        return True, f'로컬 결제대기 주문 저장 완료: {len(order_rows)}건'
+
+    # 결제완료 시 로컬 결제대기(입고) 주문을 찾아 재고 반영 후 상태를 성공으로 갱신합니다.
+    def apply_paid_inbound_order(
+        self,
+        order_id: str,
+        agent_name: str,
+    ) -> tuple[bool, str, int, int, int]:
+        return self._apply_paid_order_by_direction(
+            order_id=order_id,
+            agent_name=agent_name,
+            order_direction=ORDER_DIRECTION_INBOUND,
+            direction='inbound',
+            direction_label='입고',
+        )
+
+    # 결제완료 시 로컬 결제대기(출고) 주문을 찾아 재고 차감 후 상태를 성공으로 갱신합니다.
+    def apply_paid_outbound_order(
+        self,
+        order_id: str,
+        agent_name: str,
+    ) -> tuple[bool, str, int, int, int]:
+        return self._apply_paid_order_by_direction(
+            order_id=order_id,
+            agent_name=agent_name,
+            order_direction=ORDER_DIRECTION_OUTBOUND,
+            direction='outbound',
+            direction_label='출고',
+        )
+
+    # 결제 확정 시 주문 구분(입고/출고)에 맞춰 재고와 주문 상태를 함께 반영합니다.
+    def _apply_paid_order_by_direction(
+        self,
+        *,
+        order_id: str,
+        agent_name: str,
+        order_direction: str,
+        direction: str,
+        direction_label: str,
+    ) -> tuple[bool, str, int, int, int]:
+        try:
+            table = self._load_table()
+        except Exception as exc:
+            return (
+                False,
+                f'로컬 결제 확정 반영 실패: Google Sheet를 조회하지 못했습니다: '
+                f'{type(exc).__name__}: {exc}',
+                0,
+                0,
+                0,
+            )
+
+        pending_items, target_rows, item_error = self._load_pending_order_items(
+            order_id=order_id,
+            order_direction=order_direction,
+            direction_label=direction_label,
+        )
+        if item_error is not None:
+            return False, f'로컬 결제 확정 반영 실패: {item_error}', 0, 0, 0
+
+        changes, new_rows, stock_error = self._build_stock_changes(
+            table,
+            direction,
+            pending_items,
+        )
+        if stock_error is not None:
+            return False, f'로컬 결제 확정 반영 실패: {stock_error}', 0, 0, 0
+
+        stock_updates = self._stock_updates_from_changes(changes)
+        inventory_rows = (
+            [self._build_new_inventory_row(row) for row in new_rows]
+            if direction == 'inbound'
+            else []
+        )
+
+        try:
+            if inventory_rows:
+                self._append_inventory_rows(inventory_rows)
+            self._write_stock_updates(stock_updates)
+            self._update_order_status_rows_to_success(target_rows)
+        except Exception as exc:
+            return (
+                False,
+                f'로컬 결제 확정 반영 실패: Google Sheet를 업데이트하지 못했습니다: '
+                f'{type(exc).__name__}: {exc}',
+                0,
+                0,
+                0,
+            )
+
+        updated_inventory_count = len(
+            [change for change in changes if not change.is_new]
+        )
+        appended_inventory_count = len(inventory_rows)
+        updated_order_count = len(target_rows)
+        return (
+            True,
+            (
+                f'로컬 결제 확정 반영 완료(에이전트: {agent_name}): '
+                f'재고 업데이트 {updated_inventory_count}건, '
+                f'재고 신규행 {appended_inventory_count}건, '
+                f'주문상태 업데이트 {updated_order_count}건'
+            ),
+            updated_inventory_count,
+            appended_inventory_count,
+            updated_order_count,
+        )
+
+    # 계산된 재고 변경 목록을 시트 반영 단위(셀 업데이트 목록)로 변환합니다.
+    def _stock_updates_from_changes(
+        self,
+        changes: list[StockChange],
+    ) -> list[StockCellUpdate]:
+        stock_updates: list[StockCellUpdate] = []
+        for change in changes:
+            if change.is_new:
+                continue
+            stock_updates.append(
+                StockCellUpdate(change.row, change.col, change.after_stock)
+            )
+            if (
+                change.write_unit_price is not None
+                and change.price_col is not None
+            ):
+                stock_updates.append(
+                    StockCellUpdate(
+                        change.row,
+                        change.price_col,
+                        change.write_unit_price,
+                    )
+                )
+        return stock_updates
+
     def _load_table(self) -> GoogleSheetTable:
         values = (
             self._values_loader()
@@ -371,6 +576,7 @@ class GoogleSheetInventory:
         if rows:
             worksheet.append_rows(rows)
 
+    # 주문 워크시트에 행을 추가하기 전에 헤더 정합성을 검증합니다.
     def _append_order_rows(self, rows: list[list[object]]) -> None:
         if self._order_appender is not None:
             self._order_appender(rows)
@@ -380,8 +586,192 @@ class GoogleSheetInventory:
         values = worksheet.get_all_values()
         if not values:
             worksheet.append_row(list(self.config.order_headers))
+        else:
+            self._validate_order_headers(values[0])
         if rows:
             worksheet.append_rows(rows)
+
+    # 주문 워크시트 전체 값을 읽어옵니다.
+    def _load_order_values(self) -> list[list[object]]:
+        if self._order_values_loader is not None:
+            return self._order_values_loader()
+        worksheet = self._open_order_worksheet()
+        return worksheet.get_all_values()
+
+    # 주문 워크시트 상태 컬럼 업데이트를 배치로 반영합니다.
+    def _write_order_status_updates(
+        self,
+        updates: list[dict[str, object]],
+    ) -> None:
+        if self._order_status_writer is not None:
+            self._order_status_writer(updates)
+            return
+        worksheet = self._open_order_worksheet()
+        if updates:
+            worksheet.batch_update(updates)
+
+    # 주문 워크시트 헤더가 설정과 동일한지 검증하고 누락/불일치를 명시적으로 실패시킵니다.
+    def _validate_order_headers(self, headers: list[object]) -> None:
+        expected_headers = list(self.config.order_headers)
+        current_headers = [str(header).strip() for header in headers]
+        if current_headers == expected_headers:
+            return
+        if ORDER_HEADER_ORDER_ID not in current_headers:
+            raise ValueError(
+                'order 워크시트 헤더에 주문번호 열이 없습니다. '
+                f'기대 헤더: {expected_headers}; 현재 헤더: {current_headers}'
+            )
+        raise ValueError(
+            'order 워크시트 헤더 순서/이름이 올바르지 않습니다. '
+            f'기대 헤더: {expected_headers}; 현재 헤더: {current_headers}'
+        )
+
+    # 주문번호 기준 결제대기 입고 행을 조회해 재고 반영용 아이템과 대상 행번호를 반환합니다.
+    def _load_pending_inbound_order_items(
+        self,
+        order_id: str,
+    ) -> tuple[list[StockChangeItem], list[int], str | None]:
+        return self._load_pending_order_items(
+            order_id=order_id,
+            order_direction=ORDER_DIRECTION_INBOUND,
+            direction_label='입고',
+        )
+
+    # 주문번호 기준 결제대기 출고 행을 조회해 재고 반영용 아이템과 대상 행번호를 반환합니다.
+    def _load_pending_outbound_order_items(
+        self,
+        order_id: str,
+    ) -> tuple[list[StockChangeItem], list[int], str | None]:
+        return self._load_pending_order_items(
+            order_id=order_id,
+            order_direction=ORDER_DIRECTION_OUTBOUND,
+            direction_label='출고',
+        )
+
+    # 주문번호/구분 기준 결제대기 주문 행을 조회해 재고 반영용 아이템과 대상 행번호를 반환합니다.
+    def _load_pending_order_items(
+        self,
+        *,
+        order_id: str,
+        order_direction: str,
+        direction_label: str,
+    ) -> tuple[list[StockChangeItem], list[int], str | None]:
+        order_values = self._load_order_values()
+        if len(order_values) < 2:
+            return [], [], f'주문번호를 찾을 수 없습니다: {order_id}'
+
+        headers = [str(value).strip() for value in order_values[0]]
+        self._validate_order_headers(headers)
+        header_index = {
+            header: index for index, header in enumerate(headers)
+        }
+        required_headers = (
+            ORDER_HEADER_ORDER_ID,
+            ORDER_HEADER_DIRECTION,
+            ORDER_HEADER_STATUS,
+            ORDER_HEADER_PART_CODE,
+            ORDER_HEADER_QUANTITY,
+            ORDER_HEADER_PRICE,
+        )
+        missing_headers = [
+            header
+            for header in required_headers
+            if header not in header_index
+        ]
+        if missing_headers:
+            return [], [], (
+                'order 워크시트 필수 헤더가 없습니다: '
+                f'{", ".join(missing_headers)}'
+            )
+
+        target_rows: list[int] = []
+        pending_items: list[StockChangeItem] = []
+        for worksheet_row_index, row in enumerate(order_values[1:], start=2):
+            row_order_id = self._row_cell_text(
+                row,
+                header_index[ORDER_HEADER_ORDER_ID],
+            )
+            if row_order_id != order_id.strip():
+                continue
+            row_direction = self._row_cell_text(
+                row,
+                header_index[ORDER_HEADER_DIRECTION],
+            )
+            row_status = self._row_cell_text(
+                row,
+                header_index[ORDER_HEADER_STATUS],
+            )
+            if (
+                row_direction != order_direction
+                or row_status != ORDER_STATUS_PAYMENT_PENDING
+            ):
+                continue
+
+            part_code = self._row_cell_text(
+                row,
+                header_index[ORDER_HEADER_PART_CODE],
+            )
+            if not part_code:
+                return [], [], '결제대기 주문 행에 부품번호가 없습니다.'
+            quantity = self._parse_stock(
+                self._row_cell_text(
+                    row,
+                    header_index[ORDER_HEADER_QUANTITY],
+                )
+            )
+            if quantity is None or quantity <= 0:
+                return [], [], '결제대기 주문 행의 수량이 올바르지 않습니다.'
+
+            amount = self._parse_stock(
+                self._row_cell_text(
+                    row,
+                    header_index[ORDER_HEADER_PRICE],
+                )
+            )
+            unit_price = (
+                amount // quantity
+                if amount is not None and quantity > 0 and amount % quantity == 0
+                else None
+            )
+
+            pending_items.append(
+                StockChangeItem(
+                    part=part_code,
+                    quantity=quantity,
+                    unit_price=unit_price,
+                    part_code=part_code,
+                )
+            )
+            target_rows.append(worksheet_row_index)
+
+        if not pending_items:
+            return [], [], (
+                f'결제대기 {direction_label} 주문 행을 찾을 수 없습니다: {order_id}'
+            )
+        return pending_items, target_rows, None
+
+    # 지정한 주문 워크시트 행들의 상태를 성공으로 일괄 갱신합니다.
+    def _update_order_status_rows_to_success(self, row_indices: list[int]) -> None:
+        if not row_indices:
+            return
+        order_values = self._load_order_values()
+        if not order_values:
+            return
+        headers = [str(value).strip() for value in order_values[0]]
+        self._validate_order_headers(headers)
+        try:
+            status_col_index = headers.index(ORDER_HEADER_STATUS) + 1
+        except ValueError as exc:
+            raise ValueError('order 워크시트에 상태 열이 없습니다.') from exc
+
+        updates = [
+            {
+                RANGE: self._a1_cell(row_index, status_col_index),
+                VALUES: [[ORDER_STATUS_SUCCESS]],
+            }
+            for row_index in row_indices
+        ]
+        self._write_order_status_updates(updates)
 
     def _open_inventory_worksheet(self):
         spreadsheet = self._open_spreadsheet()
@@ -641,6 +1031,12 @@ class GoogleSheetInventory:
             return None
         return int(number)
 
+    # 주문 워크시트 행의 지정된 열 값을 안전하게 문자열로 읽습니다.
+    def _row_cell_text(self, row: list[object], col_index: int) -> str:
+        if col_index < 0 or col_index >= len(row):
+            return ''
+        return str(row[col_index]).strip()
+
     # 주문 워크시트 기록 행을 방향과 상태값에 맞춰 생성합니다.
     def _order_row(
         self,
@@ -657,17 +1053,21 @@ class GoogleSheetInventory:
             else ''
         )
         header_values: dict[str, object] = {
-            '기록시각': datetime.now(timezone.utc).isoformat(),
-            '주문번호': order_id or '',
-            '에이전트': agent_name,
-            '구분': '입고' if direction == 'inbound' else '출고',
-            '부품번호': change.part_code or '',
-            '수량': change.quantity,
-            '변경전재고': change.before_stock,
-            '변경후재고': change.after_stock,
-            '가격': amount,
-            '요청내용': request_text,
-            '상태': status,
+            ORDER_HEADER_RECORDED_AT: datetime.now(timezone.utc).isoformat(),
+            ORDER_HEADER_ORDER_ID: order_id or '',
+            ORDER_HEADER_AGENT_NAME: agent_name,
+            ORDER_HEADER_DIRECTION: (
+                ORDER_DIRECTION_INBOUND
+                if direction == 'inbound'
+                else ORDER_DIRECTION_OUTBOUND
+            ),
+            ORDER_HEADER_PART_CODE: change.part_code or '',
+            ORDER_HEADER_QUANTITY: change.quantity,
+            ORDER_HEADER_BEFORE_STOCK: change.before_stock,
+            ORDER_HEADER_AFTER_STOCK: change.after_stock,
+            ORDER_HEADER_PRICE: amount,
+            ORDER_HEADER_REQUEST_TEXT: request_text,
+            ORDER_HEADER_STATUS: status,
         }
         return [
             header_values.get(header, '')

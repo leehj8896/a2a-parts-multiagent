@@ -13,8 +13,8 @@ from parts_multiagent.stock_inbound import parse as parse_stock_inbound
 
 INVENTORY_HEADERS = ['부품번호', '부품명', '수량', '가격(원)']
 ORDER_HEADERS = [
-    '기록시각',
     '주문번호',
+    '기록시각',
     '에이전트',
     '구분',
     '부품번호',
@@ -588,6 +588,244 @@ class GoogleSheetInventoryTest(unittest.TestCase):
             ],
         )
 
+    def test_register_local_pending_inbound_order_appends_pending_inbound_rows(self) -> None:
+        order_rows = []
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+            ],
+            order_appender=order_rows.extend,
+        )
+
+        is_saved, message = sheet.register_local_pending_inbound_order(
+            order_id='a1b2c3d4e5',
+            items=[StockChangeItem('FLT-101', 3, unit_price=5000, part_code='FLT-101')],
+            request_text='FLT-101 3',
+            agent_name='B',
+        )
+
+        self.assertTrue(is_saved)
+        self.assertIn('로컬 결제대기 주문 저장 완료', message)
+        self.assertEqual(len(order_rows), 1)
+        self.assertEqual(
+            order_rows[0][0:11],
+            [
+                'a1b2c3d4e5',
+                order_rows[0][1],
+                'B',
+                '입고',
+                'FLT-101',
+                3,
+                7,
+                10,
+                15000,
+                'FLT-101 3',
+                '결제대기',
+            ],
+        )
+
+    def test_apply_paid_inbound_order_updates_inventory_and_order_status(self) -> None:
+        stock_updates = []
+        inventory_rows = []
+        order_status_updates = []
+        order_values = [
+            ORDER_HEADERS,
+            ['a1b2c3d4e5', '2026-01-01T00:00:00Z', 'B', '입고', 'FLT-101', '3', '7', '10', '15000', 'FLT-101 3', '결제대기'],
+            ['a1b2c3d4e5', '2026-01-01T00:00:00Z', 'B', '입고', 'NEW-001', '2', '0', '2', '16000', 'NEW-001 2', '결제대기'],
+        ]
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+                order_headers=tuple(ORDER_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+            ],
+            stock_writer=stock_updates.extend,
+            inventory_appender=inventory_rows.extend,
+            order_values_loader=lambda: order_values,
+            order_status_writer=order_status_updates.extend,
+        )
+
+        (
+            is_applied,
+            message,
+            updated_inventory_count,
+            appended_inventory_count,
+            updated_order_count,
+        ) = sheet.apply_paid_inbound_order('a1b2c3d4e5', 'A')
+
+        self.assertTrue(is_applied)
+        self.assertIn('로컬 결제 확정 반영 완료', message)
+        self.assertIn('에이전트: A', message)
+        self.assertEqual(updated_inventory_count, 1)
+        self.assertEqual(appended_inventory_count, 1)
+        self.assertEqual(updated_order_count, 2)
+        self.assertEqual(
+            stock_updates,
+            [StockCellUpdate(2, 3, 10), StockCellUpdate(2, 4, 5000)],
+        )
+        self.assertEqual(inventory_rows, [['NEW-001', 'NEW-001', 2, 8000]])
+        self.assertEqual(len(order_status_updates), 2)
+        self.assertEqual(order_status_updates[0]['range'], 'K2')
+        self.assertEqual(order_status_updates[0]['values'], [['성공']])
+        self.assertEqual(order_status_updates[1]['range'], 'K3')
+        self.assertEqual(order_status_updates[1]['values'], [['성공']])
+
+    def test_apply_paid_inbound_order_returns_error_when_pending_rows_missing(self) -> None:
+        order_values = [
+            ORDER_HEADERS,
+            ['x1', '2026-01-01T00:00:00Z', 'B', '입고', 'FLT-101', '3', '7', '10', '15000', 'FLT-101 3', '성공'],
+        ]
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+                order_headers=tuple(ORDER_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+            ],
+            stock_writer=lambda updates: None,
+            order_values_loader=lambda: order_values,
+            order_status_writer=lambda updates: None,
+        )
+
+        is_applied, message, _, _, _ = sheet.apply_paid_inbound_order(
+            'a1b2c3d4e5',
+            'A',
+        )
+
+        self.assertFalse(is_applied)
+        self.assertIn('결제대기 입고 주문 행을 찾을 수 없습니다', message)
+
+    def test_apply_paid_outbound_order_updates_inventory_and_order_status(self) -> None:
+        stock_updates = []
+        order_status_updates = []
+        order_values = [
+            ORDER_HEADERS,
+            ['a1b2c3d4e5', '2026-01-01T00:00:00Z', 'A', '출고', 'FLT-101', '3', '7', '4', '15000', 'FLT-101 3', '결제대기'],
+        ]
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+                order_headers=tuple(ORDER_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+            ],
+            stock_writer=stock_updates.extend,
+            order_values_loader=lambda: order_values,
+            order_status_writer=order_status_updates.extend,
+        )
+
+        (
+            is_applied,
+            message,
+            updated_inventory_count,
+            appended_inventory_count,
+            updated_order_count,
+        ) = sheet.apply_paid_outbound_order('a1b2c3d4e5', 'A')
+
+        self.assertTrue(is_applied)
+        self.assertIn('로컬 결제 확정 반영 완료', message)
+        self.assertIn('에이전트: A', message)
+        self.assertEqual(updated_inventory_count, 1)
+        self.assertEqual(appended_inventory_count, 0)
+        self.assertEqual(updated_order_count, 1)
+        self.assertEqual(stock_updates, [StockCellUpdate(2, 3, 4)])
+        self.assertEqual(len(order_status_updates), 1)
+        self.assertEqual(order_status_updates[0]['range'], 'K2')
+        self.assertEqual(order_status_updates[0]['values'], [['성공']])
+
+    def test_apply_paid_outbound_order_returns_error_when_pending_rows_missing(self) -> None:
+        order_values = [
+            ORDER_HEADERS,
+            ['x1', '2026-01-01T00:00:00Z', 'A', '출고', 'FLT-101', '3', '7', '4', '15000', 'FLT-101 3', '성공'],
+        ]
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+                order_headers=tuple(ORDER_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+            ],
+            stock_writer=lambda updates: None,
+            order_values_loader=lambda: order_values,
+            order_status_writer=lambda updates: None,
+        )
+
+        is_applied, message, _, _, _ = sheet.apply_paid_outbound_order(
+            'a1b2c3d4e5',
+            'A',
+        )
+
+        self.assertFalse(is_applied)
+        self.assertIn('결제대기 출고 주문 행을 찾을 수 없습니다', message)
+
+    def test_apply_paid_outbound_order_returns_error_when_stock_is_not_enough(self) -> None:
+        stock_updates = []
+        order_status_updates = []
+        order_values = [
+            ORDER_HEADERS,
+            ['a1b2c3d4e5', '2026-01-01T00:00:00Z', 'A', '출고', 'FLT-101', '8', '7', '-1', '40000', 'FLT-101 8', '결제대기'],
+        ]
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+                order_headers=tuple(ORDER_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+            ],
+            stock_writer=stock_updates.extend,
+            order_values_loader=lambda: order_values,
+            order_status_writer=order_status_updates.extend,
+        )
+
+        is_applied, message, _, _, _ = sheet.apply_paid_outbound_order(
+            'a1b2c3d4e5',
+            'A',
+        )
+
+        self.assertFalse(is_applied)
+        self.assertIn('출고 수량이 현재 재고보다 큽니다', message)
+        self.assertEqual(stock_updates, [])
+        self.assertEqual(order_status_updates, [])
+
     def test_inbound_uses_part_code_in_order_row_when_provided(self) -> None:
         order_rows = []
         sheet = GoogleSheetInventory(
@@ -762,6 +1000,55 @@ class GoogleSheetInventoryTest(unittest.TestCase):
         self.assertEqual(worksheet.appended_rows[0], ORDER_HEADERS)
         self.assertEqual(len(worksheet.appended_rows[1]), len(ORDER_HEADERS))
 
+    def test_order_sheet_missing_order_id_header_returns_error(self) -> None:
+        class StubWorksheet:
+            def get_all_values(self) -> list[list[object]]:
+                return [[
+                    '기록시각',
+                    '에이전트',
+                    '구분',
+                    '부품번호',
+                    '수량',
+                    '변경전재고',
+                    '변경후재고',
+                    '가격',
+                    '요청내용',
+                    '상태',
+                ]]
+
+            def append_row(self, row: list[object]) -> None:
+                return None
+
+            def append_rows(self, rows: list[list[object]]) -> None:
+                return None
+
+        sheet = GoogleSheetInventory(
+            GoogleSheetConfig(
+                service_account_file='/tmp/service-account.json',
+                spreadsheet_id='sheet-123',
+                inventory_worksheet='inventory',
+                order_worksheet='orders',
+                inventory_headers=tuple(INVENTORY_HEADERS),
+                order_headers=tuple(ORDER_HEADERS),
+            ),
+            values_loader=lambda: [
+                INVENTORY_HEADERS,
+                ['FLT-101', 'Oil Filter', '7', '5000'],
+            ],
+            stock_writer=lambda updates: None,
+        )
+        sheet._open_order_worksheet = lambda: StubWorksheet()
+
+        _, result = sheet.change_stock(
+            'outbound',
+            [StockChangeItem('FLT-101', 1)],
+            '/local-stock-outbound FLT-101 1',
+            'A',
+        )
+
+        self.assertIn('Google Sheet를 업데이트하지 못했습니다', result)
+        self.assertIn('order 워크시트 헤더에 주문번호 열이 없습니다', result)
+
     def test_update_rejects_multiple_matches_without_writing(self) -> None:
         stock_updates = []
         sheet = GoogleSheetInventory(
@@ -796,7 +1083,6 @@ class StockInboundParserTest(unittest.TestCase):
     def test_structured_payload_stays_structured(self) -> None:
         request = parse_stock_inbound('FLT-101 3, BRK-001 2')
 
-        self.assertIsNone(request.target_agent)
         self.assertEqual(request.raw_items, 'FLT-101 3, BRK-001 2')
         self.assertEqual([item.part for item in request.items], ['FLT-101', 'BRK-001'])
 

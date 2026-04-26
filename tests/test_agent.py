@@ -14,12 +14,15 @@ from parts_multiagent.constants.prefixes import (
     INVENTORY_LOOKUP_PEERS_PREFIX,
     LOCAL_STOCK_INBOUND_PREFIX,
     ORDER_SELECTION_PREFIX,
+    PAYMENT_COMPLETION_PREFIX,
+    PEER_PAYMENT_COMPLETION_PREFIX,
     PEER_STOCK_OUTBOUND_PREFIX,
 )
 from parts_multiagent.constants.structured_payload_keys import (
     AGENT_NAME,
     ESTIMATED_DELIVERY_TIME,
     ITEMS,
+    ORDER_ID,
     PAYMENT_URL,
     PART,
     QUERY,
@@ -31,6 +34,8 @@ from parts_multiagent.constants.structured_payload_keys import (
 from parts_multiagent.domain.peer.peer_client import PeerDirectory
 from parts_multiagent.domain.peer_stock_outbound.constants.response_keys import (
     ITEMS_SHIPPED,
+    MESSAGE,
+    STATUS,
     UNIT_PRICE,
 )
 from parts_multiagent.utils.response_serialization import response_to_json_dict
@@ -66,10 +71,16 @@ class FakeInventory:
         self,
         change_stock_result: tuple[object, str] | None = None,
         pending_outbound_order_result: tuple[object, str, str] | None = None,
+        local_pending_inbound_order_result: tuple[bool, str] | None = None,
+        paid_inbound_order_result: tuple[bool, str, int, int, int] | None = None,
+        paid_outbound_order_result: tuple[bool, str, int, int, int] | None = None,
     ) -> None:
         self.queries: list[str] = []
         self.stock_changes: list[dict[str, object]] = []
         self.pending_outbound_orders: list[dict[str, object]] = []
+        self.local_pending_inbound_orders: list[dict[str, object]] = []
+        self.paid_inbound_orders: list[dict[str, object]] = []
+        self.paid_outbound_orders: list[dict[str, object]] = []
         self.change_stock_result = change_stock_result or (
             None,
             'changed:outbound:FLT-101 3:B',
@@ -78,6 +89,30 @@ class FakeInventory:
             None,
             '[inventory] 주문 접수 완료: 1건\n- FLT-101: 3개 주문 접수 (현재 재고: 7개, 상태: 결제대기)',
             'a1b2c3d4e5',
+        )
+        self.local_pending_inbound_order_result = (
+            local_pending_inbound_order_result
+            or (True, '로컬 결제대기 주문 저장 완료: 1건')
+        )
+        self.paid_inbound_order_result = (
+            paid_inbound_order_result
+            or (
+                True,
+                '로컬 결제 확정 반영 완료(에이전트: A): 재고 업데이트 1건, 재고 신규행 0건, 주문상태 업데이트 1건',
+                1,
+                0,
+                1,
+            )
+        )
+        self.paid_outbound_order_result = (
+            paid_outbound_order_result
+            or (
+                True,
+                '로컬 결제 확정 반영 완료(에이전트: A): 재고 업데이트 1건, 재고 신규행 0건, 주문상태 업데이트 1건',
+                1,
+                0,
+                1,
+            )
         )
 
     def query(self, question: str) -> tuple[str, str]:
@@ -118,6 +153,47 @@ class FakeInventory:
             }
         )
         return self.pending_outbound_order_result
+
+    # 주문선택 성공 후 로컬 결제대기 입고 행 저장 호출을 기록합니다.
+    def register_local_pending_inbound_order(
+        self,
+        *,
+        order_id: str,
+        items: list[object],
+        request_text: str,
+        agent_name: str,
+    ) -> tuple[bool, str]:
+        self.local_pending_inbound_orders.append(
+            {
+                'order_id': order_id,
+                'items': items,
+                'request_text': request_text,
+                'agent_name': agent_name,
+            }
+        )
+        return self.local_pending_inbound_order_result
+
+    # 결제완료 후 로컬 결제 확정 반영 호출을 기록합니다.
+    def apply_paid_inbound_order(
+        self,
+        order_id: str,
+        agent_name: str,
+    ) -> tuple[bool, str, int, int, int]:
+        self.paid_inbound_orders.append(
+            {'order_id': order_id, 'agent_name': agent_name}
+        )
+        return self.paid_inbound_order_result
+
+    # 피어결제완료 후 로컬 출고 결제 확정 반영 호출을 기록합니다.
+    def apply_paid_outbound_order(
+        self,
+        order_id: str,
+        agent_name: str,
+    ) -> tuple[bool, str, int, int, int]:
+        self.paid_outbound_orders.append(
+            {'order_id': order_id, 'agent_name': agent_name}
+        )
+        return self.paid_outbound_order_result
 
     def describe(self) -> str:
         return 'fake inventory'
@@ -437,6 +513,44 @@ class PartsMultiAgentTest(unittest.IsolatedAsyncioTestCase):
             'B',
         )
 
+    async def test_structured_local_stock_inbound_with_structured_items_payload(
+        self,
+    ) -> None:
+        peers = FakePeers(
+            names=['B'],
+            responses={
+                (
+                    'B',
+                    INVENTORY_LOOKUP_LOCAL_PREFIX,
+                ): '{"status":"success","matched_row_count":1,"message":"[inventory] 일치한 행 수: 1\\n부품번호,부품명,수량,가격(원)\\nFLT-101,Oil Filter,7,5000"}',
+            },
+        )
+        agent = fake_agent(
+            peers,
+            supplier_delivery_time_by_agent={'B': 4},
+        )
+
+        response = await agent.invoke_structured_response(
+            LOCAL_STOCK_INBOUND_PREFIX,
+            {
+                RAW_ITEMS: 'FLT-101 3개',
+                ITEMS: [{PART: 'FLT-101', QUANTITY: 3}],
+            },
+        )
+        response_dict = response_to_json_dict(response)
+
+        self.assertEqual(response_dict[STATUS], 'success')
+        self.assertEqual(
+            peers.sent_structured,
+            [
+                (
+                    'B',
+                    INVENTORY_LOOKUP_LOCAL_PREFIX,
+                    {QUERY: 'FLT-101'},
+                ),
+            ],
+        )
+
     async def test_structured_local_stock_inbound_uses_delivery_time_fallback(
         self,
     ) -> None:
@@ -513,6 +627,7 @@ class PartsMultiAgentTest(unittest.IsolatedAsyncioTestCase):
                 ): json.dumps(
                     {
                         'status': 'success',
+                        'order_id': 'a1b2c3d4e5',
                         'items_shipped': 0,
                         'message': '[inventory] 주문 접수 완료: 1건\n- FLT-101: 3개 주문 접수 (현재 재고: 7개, 상태: 결제대기)',
                     },
@@ -536,11 +651,18 @@ class PartsMultiAgentTest(unittest.IsolatedAsyncioTestCase):
             response_dict[PAYMENT_URL],
             'https://pay.kakaopay.com/mock/parts-order',
         )
+        self.assertEqual(response_dict[ORDER_ID], 'a1b2c3d4e5')
         self.assertIn('B 공급처 주문이 접수되었습니다.', response_dict['message'])
+        self.assertIn('주문번호: a1b2c3d4e5', response_dict['message'])
         self.assertIn('[inventory] 주문 접수 완료: 1건', response_dict['message'])
         self.assertIn('주문 상태: 결제대기', response_dict['message'])
         self.assertEqual(response_dict[ITEMS_SHIPPED], 0)
         self.assertEqual(len(agent.inventory.stock_changes), 0)
+        self.assertEqual(len(agent.inventory.local_pending_inbound_orders), 1)
+        self.assertEqual(
+            agent.inventory.local_pending_inbound_orders[0]['order_id'],
+            'a1b2c3d4e5',
+        )
         self.assertEqual(
             peers.sent_structured,
             [
@@ -574,6 +696,48 @@ class PartsMultiAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response_dict['status'], 'error')
         self.assertEqual(response_dict[SUPPLIER_AGENT], 'B')
         self.assertIn('원격 출고 요청에 실패했습니다', response_dict['message'])
+        self.assertEqual(agent.inventory.local_pending_inbound_orders, [])
+
+    async def test_structured_order_selection_returns_error_when_local_pending_save_fails(
+        self,
+    ) -> None:
+        peers = FakePeers(
+            names=['B'],
+            responses={
+                (
+                    'B',
+                    PEER_STOCK_OUTBOUND_PREFIX,
+                ): json.dumps(
+                    {
+                        'status': 'success',
+                        'order_id': 'a1b2c3d4e5',
+                        'items_shipped': 0,
+                        'message': '[inventory] 주문 접수 완료: 1건',
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        )
+        inventory = FakeInventory(
+            local_pending_inbound_order_result=(
+                False,
+                '로컬 결제대기 주문 저장 실패: order 워크시트 헤더가 올바르지 않습니다.',
+            )
+        )
+        agent = fake_agent(peers, inventory=inventory)
+
+        response = await agent.invoke_structured_response(
+            ORDER_SELECTION_PREFIX,
+            {
+                SUPPLIER_AGENT: 'B',
+                ITEMS: [{PART: 'FLT-101', QUANTITY: 3}],
+            },
+        )
+        response_dict = response_to_json_dict(response)
+
+        self.assertEqual(response_dict['status'], 'error')
+        self.assertIn('로컬 결제대기 주문 저장 실패', response_dict['message'])
+        self.assertEqual(len(agent.inventory.local_pending_inbound_orders), 1)
 
     async def test_peer_directory_refreshes_before_sending_to_unknown_agent(
         self,
@@ -686,6 +850,234 @@ class PartsMultiAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response_dict[SUPPLIER_AGENT], 'B')
         self.assertIn('원격 출고 응답을 해석하지 못했습니다.', response_dict['message'])
 
+    async def test_structured_order_selection_returns_error_when_remote_success_missing_order_id(
+        self,
+    ) -> None:
+        peers = FakePeers(
+            names=['B'],
+            responses={
+                (
+                    'B',
+                    PEER_STOCK_OUTBOUND_PREFIX,
+                ): json.dumps(
+                    {
+                        'status': 'success',
+                        'items_shipped': 0,
+                        'message': '[inventory] 주문 접수 완료: 1건',
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        )
+        agent = fake_agent(peers)
+
+        response = await agent.invoke_structured_response(
+            ORDER_SELECTION_PREFIX,
+            {
+                SUPPLIER_AGENT: 'B',
+                ITEMS: [{PART: 'FLT-101', QUANTITY: 3}],
+            },
+        )
+        response_dict = response_to_json_dict(response)
+
+        self.assertEqual(response_dict['status'], 'error')
+        self.assertEqual(response_dict[SUPPLIER_AGENT], 'B')
+        self.assertIn('order_id가 없습니다', response_dict['message'])
+
+    async def test_structured_payment_completion_calls_specific_supplier_agent(
+        self,
+    ) -> None:
+        peers = FakePeers(
+            names=['B'],
+            responses={
+                (
+                    'B',
+                    PEER_PAYMENT_COMPLETION_PREFIX,
+                ): json.dumps(
+                    {
+                        'status': 'success',
+                        'message': '주문 o-1의 결제가 완료되었습니다.',
+                        'order_id': 'o-1',
+                        'updated_row': 3,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        )
+        agent = fake_agent(peers)
+
+        response = await agent.invoke_structured_response(
+            PAYMENT_COMPLETION_PREFIX,
+            {
+                ORDER_ID: 'o-1',
+                SUPPLIER_AGENT: 'B',
+            },
+        )
+        response_dict = response_to_json_dict(response)
+
+        self.assertEqual(response_dict['status'], 'success')
+        self.assertEqual(response_dict[ORDER_ID], 'o-1')
+        self.assertEqual(response_dict['updated_row'], 3)
+        self.assertEqual(response_dict['local_inventory_updated_count'], 1)
+        self.assertEqual(response_dict['local_inventory_appended_count'], 0)
+        self.assertEqual(response_dict['local_order_updated_count'], 1)
+        self.assertEqual(
+            agent.inventory.paid_inbound_orders,
+            [{'order_id': 'o-1', 'agent_name': 'A'}],
+        )
+        self.assertEqual(
+            peers.sent_structured,
+            [
+                (
+                    'B',
+                    PEER_PAYMENT_COMPLETION_PREFIX,
+                    {ORDER_ID: 'o-1'},
+                ),
+            ],
+        )
+
+    async def test_structured_payment_completion_requires_supplier_agent(
+        self,
+    ) -> None:
+        agent = fake_agent()
+
+        response = await agent.invoke_structured_response(
+            PAYMENT_COMPLETION_PREFIX,
+            {
+                ORDER_ID: 'o-2',
+            },
+        )
+        response_dict = response_to_json_dict(response)
+
+        self.assertEqual(response_dict[STATUS], 'error')
+        self.assertIn('구조화 요청 해석 실패', response_dict[MESSAGE])
+        self.assertIn(SUPPLIER_AGENT, response_dict[MESSAGE])
+
+    async def test_structured_payment_completion_returns_error_when_remote_call_fails(
+        self,
+    ) -> None:
+        peers = FakePeers(names=['B'], failing_names={'B'})
+        agent = fake_agent(peers)
+
+        response = await agent.invoke_structured_response(
+            PAYMENT_COMPLETION_PREFIX,
+            {
+                ORDER_ID: 'o-3',
+                SUPPLIER_AGENT: 'B',
+            },
+        )
+        response_dict = response_to_json_dict(response)
+
+        self.assertEqual(response_dict['status'], 'error')
+        self.assertIn('원격 결제 완료 요청에 실패했습니다', response_dict['message'])
+        self.assertEqual(response_dict[ORDER_ID], 'o-3')
+        self.assertEqual(agent.inventory.paid_inbound_orders, [])
+
+    async def test_structured_payment_completion_returns_error_when_local_apply_fails(
+        self,
+    ) -> None:
+        peers = FakePeers(
+            names=['B'],
+            responses={
+                (
+                    'B',
+                    PEER_PAYMENT_COMPLETION_PREFIX,
+                ): json.dumps(
+                    {
+                        'status': 'success',
+                        'message': '주문 o-9의 결제가 완료되었습니다.',
+                        'order_id': 'o-9',
+                        'updated_row': 7,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        )
+        inventory = FakeInventory(
+            paid_inbound_order_result=(
+                False,
+                '로컬 결제 확정 반영 실패: 결제대기 입고 주문 행을 찾을 수 없습니다: o-9',
+                0,
+                0,
+                0,
+            )
+        )
+        agent = fake_agent(peers, inventory=inventory)
+
+        response = await agent.invoke_structured_response(
+            PAYMENT_COMPLETION_PREFIX,
+            {
+                ORDER_ID: 'o-9',
+                SUPPLIER_AGENT: 'B',
+            },
+        )
+        response_dict = response_to_json_dict(response)
+
+        self.assertEqual(response_dict['status'], 'error')
+        self.assertIn('로컬 결제 확정 반영 실패', response_dict['message'])
+        self.assertEqual(response_dict[ORDER_ID], 'o-9')
+        self.assertEqual(response_dict['local_inventory_updated_count'], 0)
+        self.assertEqual(response_dict['local_inventory_appended_count'], 0)
+        self.assertEqual(response_dict['local_order_updated_count'], 0)
+
+    async def test_structured_peer_payment_completion_applies_local_outbound_order(
+        self,
+    ) -> None:
+        agent = fake_agent(inventory=FakeInventory())
+
+        response = await agent.invoke_structured_response(
+            PEER_PAYMENT_COMPLETION_PREFIX,
+            {
+                ORDER_ID: 'o-11',
+            },
+        )
+        response_dict = response_to_json_dict(response)
+
+        self.assertEqual(response_dict['status'], 'success')
+        self.assertEqual(response_dict[ORDER_ID], 'o-11')
+        self.assertEqual(response_dict['local_inventory_updated_count'], 1)
+        self.assertEqual(response_dict['local_inventory_appended_count'], 0)
+        self.assertEqual(response_dict['local_order_updated_count'], 1)
+        self.assertEqual(
+            agent.inventory.paid_outbound_orders,
+            [{'order_id': 'o-11', 'agent_name': 'A'}],
+        )
+        self.assertEqual(agent.inventory.paid_inbound_orders, [])
+
+    async def test_structured_peer_payment_completion_returns_error_when_local_apply_fails(
+        self,
+    ) -> None:
+        inventory = FakeInventory(
+            paid_outbound_order_result=(
+                False,
+                '로컬 결제 확정 반영 실패: 결제대기 출고 주문 행을 찾을 수 없습니다: o-12',
+                0,
+                0,
+                0,
+            ),
+        )
+        agent = fake_agent(inventory=inventory)
+
+        response = await agent.invoke_structured_response(
+            PEER_PAYMENT_COMPLETION_PREFIX,
+            {
+                ORDER_ID: 'o-12',
+            },
+        )
+        response_dict = response_to_json_dict(response)
+
+        self.assertEqual(response_dict['status'], 'error')
+        self.assertIn('로컬 결제 확정 반영 실패', response_dict['message'])
+        self.assertEqual(response_dict[ORDER_ID], 'o-12')
+        self.assertEqual(response_dict['local_inventory_updated_count'], 0)
+        self.assertEqual(response_dict['local_inventory_appended_count'], 0)
+        self.assertEqual(response_dict['local_order_updated_count'], 0)
+        self.assertEqual(
+            agent.inventory.paid_outbound_orders,
+            [{'order_id': 'o-12', 'agent_name': 'A'}],
+        )
+        self.assertEqual(agent.inventory.paid_inbound_orders, [])
+
     async def test_structured_peer_stock_outbound_returns_error_when_stock_is_not_enough(
         self,
     ) -> None:
@@ -764,9 +1156,11 @@ class PartsMultiAgentTest(unittest.IsolatedAsyncioTestCase):
                 ITEMS: [{PART: 'FLT-101', QUANTITY: 3}],
             },
         )
+        response_dict = response_to_json_dict(result)
 
-        self.assertIn('구조화 요청 해석 실패', result)
-        self.assertIn('supplier_agent', result)
+        self.assertEqual(response_dict[STATUS], 'error')
+        self.assertIn('구조화 요청 해석 실패', response_dict[MESSAGE])
+        self.assertIn(SUPPLIER_AGENT, response_dict[MESSAGE])
 
     async def test_structured_order_selection_requires_items(
         self,
@@ -780,9 +1174,11 @@ class PartsMultiAgentTest(unittest.IsolatedAsyncioTestCase):
                 ITEMS: [],
             },
         )
+        response_dict = response_to_json_dict(result)
 
-        self.assertIn('구조화 요청 해석 실패', result)
-        self.assertIn('items', result)
+        self.assertEqual(response_dict[STATUS], 'error')
+        self.assertIn('구조화 요청 해석 실패', response_dict[MESSAGE])
+        self.assertIn(ITEMS, response_dict[MESSAGE])
 
     async def test_structured_order_selection_requires_integer_quantity(
         self,
@@ -796,9 +1192,11 @@ class PartsMultiAgentTest(unittest.IsolatedAsyncioTestCase):
                 ITEMS: [{PART: 'FLT-101', QUANTITY: '3'}],
             },
         )
+        response_dict = response_to_json_dict(result)
 
-        self.assertIn('구조화 요청 해석 실패', result)
-        self.assertIn('quantity', result)
+        self.assertEqual(response_dict[STATUS], 'error')
+        self.assertIn('구조화 요청 해석 실패', response_dict[MESSAGE])
+        self.assertIn(QUANTITY, response_dict[MESSAGE])
 
     async def test_structured_local_stock_inbound_logs_peer_with_source_agent(
         self,

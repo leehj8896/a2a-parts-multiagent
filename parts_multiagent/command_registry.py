@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from . import local_inventory_query
 from . import order_selection
 from . import payment_completion
+from . import peer_payment_completion
 from . import peer_inventory_query
 from . import peer_stock_inbound
 from . import peer_stock_outbound
@@ -26,6 +27,7 @@ from .domain.local_stock_inbound.skill import SKILL_METADATA as STOCK_INBOUND_ME
 from .domain.order_selection.skill import SKILL_METADATA as ORDER_SELECTION_META
 from .domain.local_stock_outbound.skill import SKILL_METADATA as STOCK_OUTBOUND_META
 from .domain.payment_completion.skill import SKILL_METADATA as PAYMENT_COMPLETION_META
+from .domain.peer_payment_completion.skill import SKILL_METADATA as PEER_PAYMENT_COMPLETION_META
 from .domain.peer_stock_inbound.skill import SKILL_METADATA as PEER_INBOUND_META
 from .domain.peer_stock_outbound.skill import SKILL_METADATA as PEER_OUTBOUND_META
 
@@ -72,6 +74,11 @@ SKILLS: dict[str, Skill] = {
         parser=payment_completion.parse,
         handler=payment_completion.handle,
     ),  # 결제완료
+    PEER_PAYMENT_COMPLETION_META.skill_id: Skill(
+        metadata=PEER_PAYMENT_COMPLETION_META,
+        parser=peer_payment_completion.parse,
+        handler=peer_payment_completion.handle,
+    ),  # 피어결제완료
     STOCK_OUTBOUND_META.skill_id: Skill(
         metadata=STOCK_OUTBOUND_META,
         parser=stock_outbound.parse,

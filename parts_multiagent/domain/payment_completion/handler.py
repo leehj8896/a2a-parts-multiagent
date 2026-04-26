@@ -1,6 +1,20 @@
 from __future__ import annotations
 
+import json
+
 from typing import TYPE_CHECKING
+
+from parts_multiagent.constants.prefixes import PEER_PAYMENT_COMPLETION_PREFIX
+from parts_multiagent.constants.structured_payload_keys import ORDER_ID as PAYLOAD_ORDER_ID
+from parts_multiagent.domain.payment_completion.constants.response_keys import (
+    LOCAL_INVENTORY_APPENDED_COUNT,
+    LOCAL_INVENTORY_UPDATED_COUNT,
+    LOCAL_ORDER_UPDATED_COUNT,
+    MESSAGE,
+    ORDER_ID,
+    STATUS,
+    UPDATED_ROW,
+)
 
 from .types.request import PaymentCompletionRequest
 from .types.response import PaymentCompletionResponse
@@ -9,7 +23,7 @@ if TYPE_CHECKING:
     from parts_multiagent.agent import PartsMultiAgent
 
 
-# 결제 완료 상태를 조회하여 주문 상태를 '결제대기'에서 '성공'으로 업데이트합니다.
+# 결제 완료 요청을 지정한 대상 에이전트의 피어 결제 완료 스킬로 전달합니다.
 async def handle(
     agent: PartsMultiAgent,
     request: PaymentCompletionRequest,
@@ -20,86 +34,154 @@ async def handle(
             message="주문번호가 제공되지 않았습니다.",
             order_id=request.order_id,
         )
+    if not request.target_agent or not request.target_agent.strip():
+        return PaymentCompletionResponse(
+            status="error",
+            message="결제 완료를 처리할 대상 에이전트 이름(supplier_agent)을 입력해주세요.",
+            order_id=request.order_id,
+        )
 
     try:
-        updated_row = _update_order_status(agent, request.order_id)
-        if updated_row is None:
-            return PaymentCompletionResponse(
-                status="error",
-                message="주문번호를 찾을 수 없습니다.",
-                order_id=request.order_id,
-            )
-
-        return PaymentCompletionResponse(
-            status="success",
-            message=f"주문 {request.order_id}의 결제가 완료되었습니다.",
-            order_id=request.order_id,
-            updated_row=updated_row,
+        peer_result = await agent.peers.send_structured_message(
+            request.target_agent.strip(),
+            PEER_PAYMENT_COMPLETION_PREFIX,
+            {PAYLOAD_ORDER_ID: request.order_id.strip()},
+            output_formats=["application/json"],
+            raw_response=True,
         )
     except Exception as exc:
         return PaymentCompletionResponse(
             status="error",
-            message=f"상태 업데이트에 실패했습니다: {type(exc).__name__}: {exc}",
+            message=f"원격 결제 완료 요청에 실패했습니다: {type(exc).__name__}: {exc}",
             order_id=request.order_id,
         )
+    peer_response = _parse_peer_payment_response(request.order_id.strip(), peer_result)
+    if peer_response.status != "success":
+        return peer_response
 
-
-def _update_order_status(agent: PartsMultiAgent, order_id: str) -> int | None:
-    # 주문 워크시트를 열어 order_id로 행을 찾고 상태를 업데이트합니다.
-    import gspread
-
-    spreadsheet = agent.inventory._open_spreadsheet()
-
-    try:
-        worksheet = spreadsheet.worksheet(agent.inventory.config.order_worksheet)
-    except gspread.WorksheetNotFound:
-        return None
-
-    values = worksheet.get_all_values()
-    if len(values) < 2:
-        return None
-
-    # 실제 시트의 헤더 행에서 컬럼 인덱스를 찾습니다 (config 헤더와 불일치 허용).
-    actual_headers = values[0]
-    try:
-        order_id_col_index = actual_headers.index('주문번호')
-        status_col_index = actual_headers.index('상태')
-    except ValueError:
-        return None
-
-    # order_id와 일치하는 행 찾기
-    target_row_index = None
-    for i, row in enumerate(values[1:], start=2):  # 헤더 행 제외, 1-indexed
-        if order_id_col_index < len(row) and row[order_id_col_index].strip() == order_id.strip():
-            target_row_index = i
-            break
-
-    if target_row_index is None:
-        return None
-
-    # 현재 상태 확인
-    row = values[target_row_index - 1]
-    if status_col_index >= len(row):
-        return None
-
-    current_status = row[status_col_index].strip()
-    if current_status == '성공':
-        raise ValueError("이미 결제가 완료된 주문입니다.")
-
-    # 상태 업데이트
-    from parts_multiagent.domain.inventory.constants.gspread_batch_update_keys import (
-        RANGE,
-        VALUES,
+    (
+        is_applied,
+        apply_message,
+        updated_inventory_count,
+        appended_inventory_count,
+        updated_order_count,
+    ) = agent.inventory.apply_paid_inbound_order(
+        peer_response.order_id,
+        agent.config.agent_name,
+    )
+    if not is_applied:
+        return PaymentCompletionResponse(
+            status="error",
+            message=apply_message,
+            order_id=peer_response.order_id,
+            updated_row=peer_response.updated_row,
+            local_inventory_updated_count=0,
+            local_inventory_appended_count=0,
+            local_order_updated_count=0,
+        )
+    return PaymentCompletionResponse(
+        status="success",
+        message=f"{peer_response.message}\n{apply_message}",
+        order_id=peer_response.order_id,
+        updated_row=peer_response.updated_row,
+        local_inventory_updated_count=updated_inventory_count,
+        local_inventory_appended_count=appended_inventory_count,
+        local_order_updated_count=updated_order_count,
     )
 
-    status_cell = agent.inventory._a1_cell(target_row_index, status_col_index + 1)
-    worksheet.batch_update(
-        [
-            {
-                RANGE: status_cell,
-                VALUES: [["성공"]],
-            }
-        ]
+
+# 피어에서 전달받은 결제 완료 요청을 로컬 시트에만 반영합니다.
+async def handle_local_only(
+    agent: PartsMultiAgent,
+    request: PaymentCompletionRequest,
+) -> PaymentCompletionResponse:
+    return _complete_local_payment(agent, request.order_id)
+
+
+# 결제 완료 요청의 로컬 시트 반영을 수행하고 표준 응답 객체로 변환합니다.
+def _complete_local_payment(
+    agent: PartsMultiAgent,
+    order_id: str,
+) -> PaymentCompletionResponse:
+    if not order_id or not order_id.strip():
+        return PaymentCompletionResponse(
+            status="error",
+            message="주문번호가 제공되지 않았습니다.",
+            order_id=order_id,
+        )
+
+    (
+        is_applied,
+        apply_message,
+        updated_inventory_count,
+        appended_inventory_count,
+        updated_order_count,
+    ) = agent.inventory.apply_paid_outbound_order(
+        order_id.strip(),
+        agent.config.agent_name,
+    )
+    if not is_applied:
+        return PaymentCompletionResponse(
+            status="error",
+            message=apply_message,
+            order_id=order_id.strip(),
+            local_inventory_updated_count=0,
+            local_inventory_appended_count=0,
+            local_order_updated_count=0,
+        )
+    return PaymentCompletionResponse(
+        status="success",
+        message=apply_message,
+        order_id=order_id.strip(),
+        local_inventory_updated_count=updated_inventory_count,
+        local_inventory_appended_count=appended_inventory_count,
+        local_order_updated_count=updated_order_count,
     )
 
-    return target_row_index
+
+# 피어 결제 완료 응답(JSON 문자열/객체)을 PaymentCompletionResponse로 변환합니다.
+def _parse_peer_payment_response(
+    requested_order_id: str,
+    peer_result: str | dict[str, object],
+) -> PaymentCompletionResponse:
+    try:
+        payload = json.loads(peer_result) if isinstance(peer_result, str) else peer_result
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+
+    if not isinstance(payload, dict):
+        return PaymentCompletionResponse(
+            status="error",
+            message="피어 결제 완료 응답을 해석하지 못했습니다.",
+            order_id=requested_order_id,
+        )
+
+    response_status = payload.get(STATUS)
+    response_message = payload.get(MESSAGE)
+    response_order_id = payload.get(ORDER_ID)
+    response_updated_row = payload.get(UPDATED_ROW)
+    response_local_inventory_updated_count = payload.get(LOCAL_INVENTORY_UPDATED_COUNT)
+    response_local_inventory_appended_count = payload.get(LOCAL_INVENTORY_APPENDED_COUNT)
+    response_local_order_updated_count = payload.get(LOCAL_ORDER_UPDATED_COUNT)
+
+    return PaymentCompletionResponse(
+        status=response_status if isinstance(response_status, str) else "error",
+        message=response_message if isinstance(response_message, str) else "",
+        order_id=response_order_id if isinstance(response_order_id, str) else requested_order_id,
+        updated_row=response_updated_row if isinstance(response_updated_row, int) else None,
+        local_inventory_updated_count=(
+            response_local_inventory_updated_count
+            if isinstance(response_local_inventory_updated_count, int)
+            else 0
+        ),
+        local_inventory_appended_count=(
+            response_local_inventory_appended_count
+            if isinstance(response_local_inventory_appended_count, int)
+            else 0
+        ),
+        local_order_updated_count=(
+            response_local_order_updated_count
+            if isinstance(response_local_order_updated_count, int)
+            else 0
+        ),
+    )

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from parts_multiagent.constants.structured_payload_keys import (
+    ORDER_ID,
     PAYMENT_URL,
     SUPPLIER_AGENT,
 )
@@ -22,6 +23,7 @@ class OrderSelectionResponse:
     status: str
     supplier_agent: str
     payment_url: str = ""
+    order_id: str = ""
     items_shipped: int = 0
     message: str = ""
     details: dict[str, Any] | None = None
@@ -35,6 +37,7 @@ class OrderSelectionResponse:
             STATUS: self.status,
             SUPPLIER_AGENT: self.supplier_agent,
             PAYMENT_URL: self.payment_url,
+            ORDER_ID: self.order_id,
             ITEMS_SHIPPED: self.items_shipped,
             MESSAGE: self.message,
         }

@@ -105,9 +105,9 @@
       ]
     },
     {
-      "description": "결제 완료된 주문의 상태를 '결제대기'에서 '성공'으로 업데이트합니다.",
+      "description": "사용자가 지정한 대상 에이전트에 결제 완료 처리를 요청합니다.",
       "examples": [
-        "{\"order_id\":\"a1b2c3d4e5\"}"
+        "{\"supplier_agent\":\"B\",\"order_id\":\"a1b2c3d4e5\"}"
       ],
       "id": "결제완료",
       "inputModes": [
@@ -122,6 +122,26 @@
         "payment",
         "completion",
         "order"
+      ]
+    },
+    {
+      "description": "다른 에이전트에서 전달한 결제 완료 주문의 재고와 주문 상태를 로컬에 함께 반영합니다.",
+      "examples": [
+        "{\"order_id\":\"a1b2c3d4e5\"}"
+      ],
+      "id": "피어결제완료",
+      "inputModes": [
+        "application/json"
+      ],
+      "name": "다른 에이전트 결제 완료 처리",
+      "outputModes": [
+        "application/json"
+      ],
+      "security": null,
+      "tags": [
+        "payment",
+        "completion",
+        "peer"
       ]
     },
     {

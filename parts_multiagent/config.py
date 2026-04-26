@@ -34,8 +34,8 @@ DEFAULT_GOOGLE_SHEET_INVENTORY_WORKSHEET = 'inventory'
 DEFAULT_GOOGLE_SHEET_ORDER_WORKSHEET = 'orders'
 DEFAULT_INVENTORY_HEADERS = ('부품번호', '부품명', '수량', '가격(원)')
 DEFAULT_ORDER_HEADERS = (
-    '기록시각',
     '주문번호',
+    '기록시각',
     '에이전트',
     '구분',
     '부품번호',
@@ -131,18 +131,8 @@ def load_config() -> PartsAgentConfig:
                 'GOOGLE_ORDER_WORKSHEET',
                 DEFAULT_GOOGLE_SHEET_ORDER_WORKSHEET,
             ),
-            inventory_headers=tuple(
-                os.getenv(
-                    'GOOGLE_SHEET_INVENTORY_HEADERS',
-                    ','.join(DEFAULT_INVENTORY_HEADERS),
-                ).split(',')
-            ),
-            order_headers=tuple(
-                os.getenv(
-                    'GOOGLE_SHEET_ORDER_HEADERS',
-                    ','.join(DEFAULT_ORDER_HEADERS),
-                ).split(',')
-            ),
+            inventory_headers=DEFAULT_INVENTORY_HEADERS,
+            order_headers=DEFAULT_ORDER_HEADERS,
         ),
         llm_base_url=os.getenv('LLM_BASE_URL', DEFAULT_LLM_BASE_URL),
         llm_model=os.getenv('LLM_MODEL', DEFAULT_LLM_MODEL),

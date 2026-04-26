@@ -4,22 +4,20 @@ from dataclasses import dataclass, field
 
 from a2a.types import AgentSkill
 
-from parts_multiagent.constants.skill_prefixes import SKILL_PAYMENT_COMPLETION
+from parts_multiagent.constants.skill_prefixes import (
+    SKILL_PEER_PAYMENT_COMPLETION,
+)
 
 
 @dataclass(frozen=True)
-class PaymentCompletionSkillMetadata:
-    skill_id: str = SKILL_PAYMENT_COMPLETION
-    name: str = "주문 결제 완료 처리"
-    description: str = (
-        "사용자가 지정한 대상 에이전트에 결제 완료 처리를 요청합니다."
-    )
-    tags: list[str] = field(
-        default_factory=lambda: ["payment", "completion", "order"]
-    )
+class PeerPaymentCompletionSkillMetadata:
+    skill_id: str = SKILL_PEER_PAYMENT_COMPLETION
+    name: str = "다른 에이전트 결제 완료 처리"
+    description: str = "다른 에이전트에서 전달한 결제 완료 주문의 재고와 주문 상태를 로컬에 함께 반영합니다."
+    tags: list[str] = field(default_factory=lambda: ["payment", "completion", "peer"])
     examples: list[str] = field(
         default_factory=lambda: [
-            '{"supplier_agent":"B","order_id":"a1b2c3d4e5"}'
+            '{"order_id":"a1b2c3d4e5"}'
         ]
     )
     input_modes: list[str] = field(default_factory=lambda: ["application/json"])
@@ -37,4 +35,4 @@ class PaymentCompletionSkillMetadata:
         )
 
 
-SKILL_METADATA = PaymentCompletionSkillMetadata()
+SKILL_METADATA = PeerPaymentCompletionSkillMetadata()

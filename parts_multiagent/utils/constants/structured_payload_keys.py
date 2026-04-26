@@ -10,7 +10,6 @@ PAYLOAD = 'payload'
 QUERY = 'query'
 
 AGENT_NAME = 'agent_name'
-TARGET_AGENT = 'target_agent'
 SUPPLIER_AGENT = 'supplier_agent'
 ITEMS = 'items'
 PART = 'part'

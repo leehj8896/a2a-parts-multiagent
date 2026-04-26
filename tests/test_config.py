@@ -21,15 +21,12 @@ REQUIRED_ENV = {
 
 
 class ConfigTest(unittest.TestCase):
-    def test_loads_order_headers_from_env(self) -> None:
+    def test_ignores_order_headers_from_env_and_uses_default(self) -> None:
         with patch.dict(
             os.environ,
             {
                 **REQUIRED_ENV,
-                'GOOGLE_SHEET_ORDER_HEADERS': (
-                    '기록시각,주문번호,에이전트,구분,부품번호,수량,변경전재고,'
-                    '변경후재고,가격,요청내용,상태'
-                ),
+                'GOOGLE_SHEET_ORDER_HEADERS': '임의헤더1,임의헤더2',
             },
             clear=True,
         ):

@@ -18,9 +18,9 @@ LAN 장치마다 프로세스 하나를 시작합니다. 공통 설정은 하나
 합니다. 최소 시트는 다음 형태를 사용할 수 있습니다:
 
 ```csv
-part_number,part_name,stock,location
-BRK-001,Brake Pad,28,A-01
-FLT-101,Oil Filter,7,A-02
+부품번호,부품명,수량,가격(원)
+BRK-001,Brake Pad,28,35000
+FLT-101,Oil Filter,7,12000
 ```
 
 에이전트를 시작하기 전에 각 스프레드시트를 서비스 계정 이메일에 Viewer 권한으로
@@ -33,7 +33,8 @@ LLM_BASE_URL="http://joonyy-synology:26414/v1"
 LLM_MODEL="github_copilot/gpt-4.1"
 PEER_AGENT_URLS="http://localhost:10001,http://localhost:10002,http://localhost:10003"
 GOOGLE_SERVICE_ACCOUNT_FILE="/absolute/path/service-account.json"
-GOOGLE_SHEET_WORKSHEET="inventory"
+GOOGLE_INVENTORY_WORKSHEET="inventory"
+GOOGLE_ORDER_WORKSHEET="orders"
 LOG_COLORS="A=cyan,B=yellow,C=magenta"
 ```
 
@@ -126,10 +127,11 @@ uv run python test_client.py --url http://localhost:10001 --structured \
 - `AGENT_DESCRIPTION`: 공개 AgentCard 설명입니다.
 - `GOOGLE_SERVICE_ACCOUNT_FILE`: 서비스 계정 JSON 파일의 필수 경로입니다.
 - `GOOGLE_SHEET_ID`: 이 에이전트가 사용할 필수 spreadsheet ID입니다.
-- `GOOGLE_SHEET_WORKSHEET`: 워크시트 이름이며, 기본값은 `inventory`입니다.
-- `GOOGLE_SHEET_ORDER_HEADERS`: 주문내역 워크시트 헤더 목록입니다. 기본값은
-  `기록시각,에이전트,구분,부품번호,수량,변경전재고,변경후재고,가격,요청내용,상태`
-  입니다.
+- `GOOGLE_INVENTORY_WORKSHEET`: 재고 워크시트 이름이며, 기본값은
+  `inventory`입니다.
+- `GOOGLE_ORDER_WORKSHEET`: 주문 이력 워크시트 이름이며, 기본값은 `orders`입니다.
+- 주문/재고 워크시트 헤더는 코드 상수(`parts_multiagent.config`)로 고정되며,
+  `.env`로 오버라이드하지 않습니다.
 - `SUPPLIER_DELIVERY_TIME_BY_AGENT`: 공급처별 배송 예정시간 표시값입니다. 공통
   `.env`가 아니라 각 에이전트 전용 env 파일인 `.env.{agent_name}`에
   `B=4,C=24`처럼 숫자만 설정합니다. 입력값은 모두 시간 단위로 해석되며

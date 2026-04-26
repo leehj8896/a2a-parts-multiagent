@@ -18,6 +18,7 @@ from .inventory_log import (
 )
 from .peer_client import PeerDirectory
 from .structured_requests import build_request_from_payload
+from .utils.response_serialization import wrap_error_response
 
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,9 @@ class PartsMultiAgent:
                 payload=payload,
                 error=exc,
             )
-            return f'구조화 요청 해석 실패: {type(exc).__name__}: {exc}'
+            return wrap_error_response(
+                error_message=f'구조화 요청 해석 실패: {type(exc).__name__}: {exc}'
+            )
 
         try:
             response = await command.handler(self, request)

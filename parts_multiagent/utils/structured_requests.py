@@ -9,6 +9,7 @@ from parts_multiagent.constants.skill_prefixes import (
     SKILL_LOCAL_STOCK_OUTBOUND,
     SKILL_ORDER_SELECTION,
     SKILL_PAYMENT_COMPLETION,
+    SKILL_PEER_PAYMENT_COMPLETION,
     SKILL_PEER_STOCK_INBOUND,
     SKILL_PEER_STOCK_OUTBOUND,
 )
@@ -21,7 +22,6 @@ from parts_multiagent.constants.structured_payload_keys import (
     QUANTITY,
     RAW_ITEMS,
     SUPPLIER_AGENT,
-    TARGET_AGENT,
 )
 from parts_multiagent.google_sheet_inventory import StockChangeItem
 from parts_multiagent.local_inventory_query import LocalInventoryQueryRequest
@@ -63,15 +63,20 @@ def build_request_from_payload(skill_id: str, payload: dict[str, Any]) -> Any:
             items=items,
         )
     if skill_id == SKILL_PAYMENT_COMPLETION:
-        return PaymentCompletionRequest(order_id=_require_str(payload, ORDER_ID))
+        return PaymentCompletionRequest(
+            order_id=_require_str(payload, ORDER_ID),
+            target_agent=_require_str(payload, SUPPLIER_AGENT),
+        )
+    if skill_id == SKILL_PEER_PAYMENT_COMPLETION:
+        return PaymentCompletionRequest(
+            order_id=_require_str(payload, ORDER_ID),
+        )
     raise ValueError(f'지원하지 않는 skill_id입니다: {skill_id}')
 
 
 def _build_stock_inbound_request(payload: dict[str, Any]) -> StockInboundRequest:
-    target_agent = _optional_str(payload, TARGET_AGENT)
     items, raw_items = _stock_items_and_raw(payload, require_items=True)
     return StockInboundRequest(
-        target_agent=target_agent,
         raw_items=raw_items,
         items=items,
     )

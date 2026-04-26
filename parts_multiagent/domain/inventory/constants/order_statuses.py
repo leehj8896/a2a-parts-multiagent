@@ -1,0 +1,4 @@
+"""주문 상태값 상수."""
+
+ORDER_STATUS_SUCCESS = "성공"
+ORDER_STATUS_PAYMENT_PENDING = "결제대기"
