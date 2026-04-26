@@ -9,31 +9,16 @@ from .types.request import StockInboundRequest
 
 
 def parse(payload: str) -> StockInboundRequest:
+    # 텍스트 주문 요청을 품목/수량 목록으로 해석합니다.
     payload = payload.strip()
     if not payload:
         raise ValueError(STOCK_INBOUND_PARSE_ERROR)
-    agent_name, separator, raw_items = payload.partition(' ')
-    if not separator or not agent_name.strip():
-        return StockInboundRequest(
-            agent_name=None,
-            raw_items='',
-            items=[],
-            raw_query=payload,
-        )
-    raw_items = raw_items.strip()
     try:
-        items = parse_stock_items(raw_items)
+        items = parse_stock_items(payload)
     except ValueError as exc:
-        if raw_items:
-            return StockInboundRequest(
-                agent_name=None,
-                raw_items='',
-                items=[],
-                raw_query=payload,
-            )
         raise ValueError(STOCK_INBOUND_PARSE_ERROR) from exc
     return StockInboundRequest(
-        agent_name=agent_name.strip(),
-        raw_items=raw_items,
+        target_agent=None,
+        raw_items=payload,
         items=items,
     )

@@ -7,6 +7,6 @@ from parts_multiagent.google_sheet_inventory import StockChangeItem
 
 @dataclass(frozen=True)
 class StockInboundRequest:
-    agent_name: str
+    target_agent: str | None
     raw_items: str
     items: list[StockChangeItem]

@@ -53,7 +53,7 @@ def _enrich_with_part_names(
         return result
 
     df = table.frame.copy()
-    name_cols = list(inventory.config.inventory_headers[:2])
+    name_cols = inventory.inventory_name_headers()
     if not name_cols or df.empty:
         return result
 

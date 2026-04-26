@@ -127,6 +127,14 @@ uv run python test_client.py --url http://localhost:10001 --structured \
 - `GOOGLE_SERVICE_ACCOUNT_FILE`: 서비스 계정 JSON 파일의 필수 경로입니다.
 - `GOOGLE_SHEET_ID`: 이 에이전트가 사용할 필수 spreadsheet ID입니다.
 - `GOOGLE_SHEET_WORKSHEET`: 워크시트 이름이며, 기본값은 `inventory`입니다.
+- `GOOGLE_SHEET_ORDER_HEADERS`: 주문내역 워크시트 헤더 목록입니다. 기본값은
+  `기록시각,에이전트,구분,부품번호,수량,변경전재고,변경후재고,가격,요청내용,상태`
+  입니다.
+- `SUPPLIER_DELIVERY_TIME_BY_AGENT`: 공급처별 배송 예정시간 표시값입니다. 공통
+  `.env`가 아니라 각 에이전트 전용 env 파일인 `.env.{agent_name}`에
+  `B=4,C=24`처럼 숫자만 설정합니다. 입력값은 모두 시간 단위로 해석되며
+  `주문하기` 응답에서는 `4시간`, `24시간`처럼 노출됩니다. 값이 없으면
+  `배송시간 확인 필요`를 표시하고, 숫자가 아닌 값이면 설정 오류로 처리합니다.
 - `LLM_BASE_URL`: OpenAI 호환 API base URL입니다.
 - `LLM_MODEL`: 모델 이름이며, 기본값은 `github_copilot/gpt-4.1`입니다.
 - `PEER_AGENT_URLS`: 현재 프로세스를 포함한 모든 에이전트의 A2A base URL을

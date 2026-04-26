@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from dotenv import dotenv_values, load_dotenv
@@ -33,6 +33,19 @@ DEFAULT_SKILL_ID = 'query_inventory_google_sheet'
 DEFAULT_GOOGLE_SHEET_INVENTORY_WORKSHEET = 'inventory'
 DEFAULT_GOOGLE_SHEET_ORDER_WORKSHEET = 'orders'
 DEFAULT_INVENTORY_HEADERS = ('부품번호', '부품명', '수량', '가격(원)')
+DEFAULT_ORDER_HEADERS = (
+    '기록시각',
+    '주문번호',
+    '에이전트',
+    '구분',
+    '부품번호',
+    '수량',
+    '변경전재고',
+    '변경후재고',
+    '가격',
+    '요청내용',
+    '상태',
+)
 DEFAULT_HOST = '0.0.0.0'
 DEFAULT_PORT = 10001
 SUPPORTED_LOG_COLORS = {
@@ -60,6 +73,9 @@ class GoogleSheetSettings:
     inventory_worksheet: str
     order_worksheet: str
     inventory_headers: tuple[str, ...]
+    order_headers: tuple[str, ...] = field(
+        default_factory=lambda: DEFAULT_ORDER_HEADERS
+    )
 
 
 @dataclass(frozen=True)
@@ -74,8 +90,10 @@ class PartsAgentConfig:
     host: str
     port: int
     agent_log_colors: dict[str, str]
+    supplier_delivery_time_by_agent: dict[str, int]
 
 
+# 런타임 환경변수를 읽어 에이전트 설정 객체를 구성합니다.
 def load_config() -> PartsAgentConfig:
     agent_name = os.getenv('AGENT_NAME')
     if not agent_name:
@@ -119,6 +137,12 @@ def load_config() -> PartsAgentConfig:
                     ','.join(DEFAULT_INVENTORY_HEADERS),
                 ).split(',')
             ),
+            order_headers=tuple(
+                os.getenv(
+                    'GOOGLE_SHEET_ORDER_HEADERS',
+                    ','.join(DEFAULT_ORDER_HEADERS),
+                ).split(',')
+            ),
         ),
         llm_base_url=os.getenv('LLM_BASE_URL', DEFAULT_LLM_BASE_URL),
         llm_model=os.getenv('LLM_MODEL', DEFAULT_LLM_MODEL),
@@ -126,6 +150,9 @@ def load_config() -> PartsAgentConfig:
         host=DEFAULT_HOST,
         port=port,
         agent_log_colors=_load_agent_log_colors(),
+        supplier_delivery_time_by_agent=(
+            _load_supplier_delivery_time_by_agent()
+        ),
     )
 
 
@@ -157,6 +184,47 @@ def _load_agent_log_colors() -> dict[str, str]:
         if name and color in SUPPORTED_LOG_COLORS:
             colors[name] = color
     return colors
+
+
+# 공급처별 배송 예정시간을 시간 단위 정수 매핑으로 읽고 검증합니다.
+def _load_supplier_delivery_time_by_agent() -> dict[str, int]:
+    delivery_time_by_agent: dict[str, int] = {}
+    for item in os.getenv(
+        'SUPPLIER_DELIVERY_TIME_BY_AGENT',
+        '',
+    ).split(','):
+        supplier_agent, separator, estimated_delivery_time = item.strip().partition('=')
+        supplier_agent = supplier_agent.strip()
+        estimated_delivery_time = estimated_delivery_time.strip()
+        if not separator or not supplier_agent or not estimated_delivery_time:
+            continue
+        delivery_time_by_agent[supplier_agent] = _parse_delivery_time_hours(
+            supplier_agent=supplier_agent,
+            raw_delivery_time=estimated_delivery_time,
+        )
+    return delivery_time_by_agent
+
+
+# 배송 예정시간 문자열을 0보다 큰 시간 단위 정수로 변환합니다.
+def _parse_delivery_time_hours(
+    *,
+    supplier_agent: str,
+    raw_delivery_time: str,
+) -> int:
+    try:
+        delivery_time_hours = int(raw_delivery_time)
+    except ValueError as exc:
+        raise ValueError(
+            'SUPPLIER_DELIVERY_TIME_BY_AGENT values must be integers that '
+            f'represent hours, got {raw_delivery_time!r} for {supplier_agent!r}.'
+        ) from exc
+
+    if delivery_time_hours <= 0:
+        raise ValueError(
+            'SUPPLIER_DELIVERY_TIME_BY_AGENT values must be greater than 0, '
+            f'got {delivery_time_hours!r} for {supplier_agent!r}.'
+        )
+    return delivery_time_hours
 
 
 def _load_app_url(peer_urls: list[str], port: int) -> str:

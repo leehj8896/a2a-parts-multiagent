@@ -10,6 +10,7 @@ REQUEST_MODULES = (
     'local_inventory_query',
     'peer_inventory_query',
     'stock_inbound',
+    'order_selection',
     'stock_outbound',
     'peer_stock_inbound',
     'peer_stock_outbound',

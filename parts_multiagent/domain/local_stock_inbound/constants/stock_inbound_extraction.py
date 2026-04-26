@@ -12,7 +12,7 @@ from parts_multiagent.utils.constants.structured_payload_keys import (
 )
 
 STOCK_INBOUND_PARSE_ERROR = (
-    '입고 요청을 보낼 agent 이름과 품목/수량을 명확히 입력해주세요.'
+    '주문할 품목과 수량을 명확히 입력해주세요.'
 )
 STOCK_INBOUND_LLM_FAILURE_PREFIX = '입고 요청 해석 실패'
 

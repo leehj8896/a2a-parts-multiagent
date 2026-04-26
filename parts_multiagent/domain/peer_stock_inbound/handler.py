@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import json
+
 from typing import TYPE_CHECKING
 
 from parts_multiagent.constants.prefixes import LOCAL_STOCK_INBOUND_PREFIX
 from parts_multiagent.constants.structured_payload_keys import RAW_QUERY
+from parts_multiagent.domain.peer_stock_outbound.constants.response_keys import (
+    ITEMS_UPDATED,
+    LOCAL_UPDATE,
+    MESSAGE,
+    STATUS,
+)
 
 from .types.request import PeerStockInboundRequest
 from .types.response import PeerStockInboundResponse
@@ -34,15 +42,20 @@ async def handle(
         LOCAL_STOCK_INBOUND_PREFIX,
         inbound_payload,
         output_formats=["application/json"],
+        raw_response=True,
     )
     
     # 응답 파싱
-    import json
     try:
         response_data = json.loads(result) if isinstance(result, str) else result
-        is_error = response_data.get("status") == "error"
-        items_received = response_data.get("data", {}).get("items_received", 0) if not is_error else 0
-        message = response_data.get("message", result)
+        is_error = response_data.get(STATUS) == "error"
+        local_update = response_data.get(LOCAL_UPDATE, {})
+        items_received = (
+            local_update.get(ITEMS_UPDATED, 0)
+            if isinstance(local_update, dict) and not is_error
+            else 0
+        )
+        message = response_data.get(MESSAGE, result)
     except (json.JSONDecodeError, TypeError):
         is_error = True
         items_received = 0

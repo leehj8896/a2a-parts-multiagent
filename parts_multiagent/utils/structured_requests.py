@@ -7,19 +7,26 @@ from parts_multiagent.constants.skill_prefixes import (
     SKILL_INVENTORY_LOOKUP_PEERS,
     SKILL_LOCAL_STOCK_INBOUND,
     SKILL_LOCAL_STOCK_OUTBOUND,
+    SKILL_ORDER_SELECTION,
+    SKILL_PAYMENT_COMPLETION,
     SKILL_PEER_STOCK_INBOUND,
     SKILL_PEER_STOCK_OUTBOUND,
 )
 from parts_multiagent.constants.structured_payload_keys import (
     AGENT_NAME,
     ITEMS,
+    ORDER_ID,
     PART,
     QUERY,
     QUANTITY,
     RAW_ITEMS,
+    SUPPLIER_AGENT,
+    TARGET_AGENT,
 )
 from parts_multiagent.google_sheet_inventory import StockChangeItem
 from parts_multiagent.local_inventory_query import LocalInventoryQueryRequest
+from parts_multiagent.order_selection import OrderSelectionRequest
+from parts_multiagent.payment_completion import PaymentCompletionRequest
 from parts_multiagent.peer_inventory_query import PeerInventoryQueryRequest
 from parts_multiagent.peer_stock_inbound import PeerStockInboundRequest
 from parts_multiagent.peer_stock_outbound import PeerStockOutboundRequest
@@ -34,6 +41,8 @@ def build_request_from_payload(skill_id: str, payload: dict[str, Any]) -> Any:
         return PeerInventoryQueryRequest(query=_require_str(payload, QUERY))
     if skill_id == SKILL_LOCAL_STOCK_INBOUND:
         return _build_stock_inbound_request(payload)
+    if skill_id == SKILL_ORDER_SELECTION:
+        return _build_order_selection_request(payload)
     if skill_id == SKILL_LOCAL_STOCK_OUTBOUND:
         items, raw_items = _stock_items_and_raw(payload, require_items=True)
         return StockOutboundRequest(raw_items=raw_items, items=items)
@@ -53,14 +62,28 @@ def build_request_from_payload(skill_id: str, payload: dict[str, Any]) -> Any:
             raw_items=raw_items,
             items=items,
         )
+    if skill_id == SKILL_PAYMENT_COMPLETION:
+        return PaymentCompletionRequest(order_id=_require_str(payload, ORDER_ID))
     raise ValueError(f'지원하지 않는 skill_id입니다: {skill_id}')
 
 
 def _build_stock_inbound_request(payload: dict[str, Any]) -> StockInboundRequest:
-    agent_name = _require_str(payload, AGENT_NAME)
+    target_agent = _optional_str(payload, TARGET_AGENT)
     items, raw_items = _stock_items_and_raw(payload, require_items=True)
     return StockInboundRequest(
-        agent_name=agent_name,
+        target_agent=target_agent,
+        raw_items=raw_items,
+        items=items,
+    )
+
+
+def _build_order_selection_request(
+    payload: dict[str, Any],
+) -> OrderSelectionRequest:
+    supplier_agent = _require_str(payload, SUPPLIER_AGENT)
+    items, raw_items = _stock_items_and_raw(payload, require_items=True)
+    return OrderSelectionRequest(
+        supplier_agent=supplier_agent,
         raw_items=raw_items,
         items=items,
     )

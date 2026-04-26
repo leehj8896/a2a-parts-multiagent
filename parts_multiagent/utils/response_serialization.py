@@ -10,6 +10,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Any
 
 
+# 응답 객체가 제공하는 전용 JSON 변환 메서드를 우선 사용합니다.
 def dataclass_to_dict(obj: Any) -> dict[str, Any]:
     """Convert a dataclass instance to a dictionary.
     
@@ -20,6 +21,7 @@ def dataclass_to_dict(obj: Any) -> dict[str, Any]:
     return obj
 
 
+# 응답 객체를 A2A 전송용 JSON 딕셔너리로 직렬화합니다.
 def response_to_json_dict(response: Any) -> dict[str, Any]:
     """Convert a response object to a JSON-serializable dictionary.
     
@@ -30,6 +32,9 @@ def response_to_json_dict(response: Any) -> dict[str, Any]:
     """
     if isinstance(response, dict):
         return response
+
+    if hasattr(response, "to_json_dict") and callable(response.to_json_dict):
+        return response.to_json_dict()
     
     if is_dataclass(response):
         return asdict(response)

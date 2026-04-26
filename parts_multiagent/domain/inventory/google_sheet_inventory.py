@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import uuid
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -8,33 +9,16 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+from parts_multiagent.config import GoogleSheetSettings
 from parts_multiagent.domain.inventory.constants.gspread_batch_update_keys import (
     RANGE,
     VALUES,
 )
 
 UNSUPPORTED_LOCATION_HEADERS = ('location', '위치')
-ORDER_HEADERS = [
-    '기록시각',
-    '에이전트',
-    '구분',
-    '품목',
-    '수량',
-    '변경전재고',
-    '변경후재고',
-    '금액',
-    '요청내용',
-    '상태',
-]
-
-
-@dataclass(frozen=True)
-class GoogleSheetConfig:
-    service_account_file: str
-    spreadsheet_id: str
-    inventory_worksheet: str
-    order_worksheet: str
-    inventory_headers: tuple[str, ...]
+GoogleSheetConfig = GoogleSheetSettings
+ORDER_STATUS_SUCCESS = '성공'
+ORDER_STATUS_PAYMENT_PENDING = '결제대기'
 
 
 @dataclass(frozen=True)
@@ -61,6 +45,7 @@ class StockCellUpdate:
 @dataclass(frozen=True)
 class StockChange:
     part: str
+    part_code: str | None
     quantity: int
     before_stock: int
     after_stock: int
@@ -112,6 +97,7 @@ class GoogleSheetInventory:
         )
 
     def query(self, question: str) -> tuple[str, str]:
+        # 사용자 질의에서 검색 조건을 추출해 재고 행을 필터링합니다.
         try:
             table = self._load_table()
         except Exception as exc:
@@ -127,8 +113,8 @@ class GoogleSheetInventory:
             return context, f'{table.source}에서 조회할 재고 행을 찾지 못했습니다.'
 
         df = table.frame.copy()
-        name_cols = list(self.config.inventory_headers[:2])
-        qty_cols = [self.config.inventory_headers[2]]
+        name_cols = self.inventory_name_headers()
+        qty_col = self.inventory_quantity_header()
         terms = self._extract_terms(question)
         low_stock_threshold = self._extract_low_stock_threshold(question)
         wants_total = self._contains_any(
@@ -151,15 +137,15 @@ class GoogleSheetInventory:
                     used_terms.append(term)
             if mask.any():
                 filtered = df[mask]
+            else:
+                filtered = df.iloc[0:0]
 
         sections = []
-        if low_stock_threshold is not None and qty_cols:
-            qty_col = qty_cols[0]
+        if low_stock_threshold is not None and qty_col is not None:
             numeric_qty = pd.to_numeric(filtered[qty_col], errors='coerce')
             filtered = filtered[numeric_qty < low_stock_threshold]
 
-        if wants_total and qty_cols:
-            qty_col = qty_cols[0]
+        if wants_total and qty_col is not None:
             total = pd.to_numeric(filtered[qty_col], errors='coerce').sum()
             sections.append(f'[{table.source}] {qty_col} 합계: {total:g}')
 
@@ -267,6 +253,78 @@ class GoogleSheetInventory:
             lines.append(f'합계 금액: {total_amount:,}원')
         return context, '\n'.join(lines)
 
+    # 피어 주문 접수 요청을 재고 차감 없이 주문 워크시트에만 기록합니다.
+    def register_pending_outbound_order(
+        self,
+        items: list[StockChangeItem],
+        request_text: str,
+        agent_name: str,
+    ) -> tuple[str, str, str]:
+        try:
+            table = self._load_table()
+        except Exception as exc:
+            context = self._source_description()
+            return (
+                context,
+                f'Google Sheet를 조회하지 못했습니다: '
+                f'{type(exc).__name__}: {exc}',
+                '',
+            )
+
+        context = self.describe(table)
+        if table.frame.empty:
+            return context, f'{table.source}에서 주문할 재고 행을 찾지 못했습니다.', ''
+        if not items:
+            return context, '주문할 품목과 수량을 입력해주세요.', ''
+
+        changes, _, error = self._build_stock_changes(
+            table,
+            'outbound',
+            items,
+        )
+        if error is not None:
+            return context, error, ''
+
+        order_id = uuid.uuid4().hex[:10]
+        order_rows = [
+            self._order_row(
+                direction='outbound',
+                request_text=request_text,
+                agent_name=agent_name,
+                change=change,
+                status=ORDER_STATUS_PAYMENT_PENDING,
+                order_id=order_id,
+            )
+            for change in changes
+        ]
+
+        try:
+            self._append_order_rows(order_rows)
+        except Exception as exc:
+            return (
+                context,
+                f'Google Sheet를 업데이트하지 못했습니다: '
+                f'{type(exc).__name__}: {exc}',
+                '',
+            )
+
+        lines = [f'[{table.source}] 주문 접수 완료: {len(changes)}건']
+        total_amount = 0
+        for change in changes:
+            price_note = ''
+            if change.unit_price is not None:
+                amount = change.unit_price * change.quantity
+                total_amount += amount
+                price_note = f', 단가: {change.unit_price:,}원, 소계: {amount:,}원'
+            lines.append(
+                f'- {change.part}: {change.quantity}개 주문 접수'
+                f' (현재 재고: {change.before_stock}개, 상태: {ORDER_STATUS_PAYMENT_PENDING})'
+                f'{price_note}'
+            )
+        if total_amount > 0:
+            lines.append(f'합계 금액: {total_amount:,}원')
+        return context, '\n'.join(lines), order_id
+
     def _load_table(self) -> GoogleSheetTable:
         values = (
             self._values_loader()
@@ -321,7 +379,7 @@ class GoogleSheetInventory:
         worksheet = self._open_order_worksheet()
         values = worksheet.get_all_values()
         if not values:
-            worksheet.append_row(ORDER_HEADERS)
+            worksheet.append_row(list(self.config.order_headers))
         if rows:
             worksheet.append_rows(rows)
 
@@ -339,7 +397,7 @@ class GoogleSheetInventory:
             return spreadsheet.add_worksheet(
                 title=self.config.order_worksheet,
                 rows=1000,
-                cols=len(ORDER_HEADERS),
+                cols=len(self.config.order_headers),
             )
 
     def _open_spreadsheet(self):
@@ -373,18 +431,51 @@ class GoogleSheetInventory:
     def _source_description(self) -> str:
         return f'{self.config.inventory_worksheet}'
 
+    # 부품재고 헤더 해석을 한 곳에서 관리합니다.
+    def inventory_name_headers(self) -> list[str]:
+        headers: list[str] = []
+        part_code_header = self.inventory_part_code_header()
+        if part_code_header is not None:
+            headers.append(part_code_header)
+        part_name_header = self.inventory_part_name_header()
+        if part_name_header is not None:
+            headers.append(part_name_header)
+        return headers
+
+    # 부품번호 열 이름을 설정에서 조회합니다.
+    def inventory_part_code_header(self) -> str | None:
+        return self._inventory_header_at(0)
+
+    # 부품명 열 이름을 설정에서 조회합니다.
+    def inventory_part_name_header(self) -> str | None:
+        return self._inventory_header_at(1)
+
+    # 수량 열 이름을 설정에서 조회합니다.
+    def inventory_quantity_header(self) -> str | None:
+        return self._inventory_header_at(2)
+
+    # 가격 열 이름을 설정에서 조회합니다.
+    def inventory_price_header(self) -> str | None:
+        return self._inventory_header_at(3)
+
+    # 부품재고 헤더 위치 접근을 공통화합니다.
+    def _inventory_header_at(self, index: int) -> str | None:
+        headers = list(self.config.inventory_headers)
+        if len(headers) <= index:
+            return None
+        return headers[index]
+
     def _build_new_inventory_row(self, nr: NewInventoryRow) -> list[object]:
         row: list[object] = [''] * len(nr.columns)
         row[nr.columns.index(nr.name_col)] = nr.part
         row[nr.columns.index(nr.qty_col)] = nr.quantity
         if nr.part_code is not None:
-            name_cols = list(self.config.inventory_headers[:2])
-            if len(name_cols) >= 2:
-                part_code_col = name_cols[0]
+            part_code_col = self.inventory_part_code_header()
+            if part_code_col is not None:
                 row[nr.columns.index(part_code_col)] = nr.part_code
-        price_col_index = self._price_column_index()
-        if nr.unit_price is not None and price_col_index is not None:
-            row[price_col_index] = nr.unit_price
+        price_col = self.inventory_price_header()
+        if nr.unit_price is not None and price_col is not None:
+            row[nr.columns.index(price_col)] = nr.unit_price
         return row
 
     def _build_stock_changes(
@@ -394,22 +485,19 @@ class GoogleSheetInventory:
         items: list[StockChangeItem],
     ) -> tuple[list[StockChange], list[NewInventoryRow], str | None]:
         df = table.frame.copy()
-        name_cols = list(self.config.inventory_headers[:2])
-        qty_cols = [self.config.inventory_headers[2]]
+        name_cols = self.inventory_name_headers()
+        qty_col = self.inventory_quantity_header()
         if not name_cols:
             return [], [], '품목을 찾을 수 있는 열이 없습니다.'
-        if not qty_cols:
+        if qty_col is None:
             return [], [], '재고 수량을 찾을 수 있는 열이 없습니다.'
 
-        qty_col = qty_cols[0]
         qty_col_index = list(df.columns).index(qty_col) + 1
         columns = list(df.columns)
-        price_col = None
+        price_col = self.inventory_price_header()
         price_col_a1_index = None
-        price_col_index = self._price_column_index()
-        if price_col_index is not None and len(columns) > price_col_index:
-            price_col = columns[price_col_index]
-            price_col_a1_index = price_col_index + 1
+        if price_col is not None and price_col in columns:
+            price_col_a1_index = columns.index(price_col) + 1
         changes = []
         new_rows: list[NewInventoryRow] = []
         used_rows: set[int] = set()
@@ -420,17 +508,21 @@ class GoogleSheetInventory:
             if len(matched) == 0:
                 if direction == 'outbound':
                     return [], [], f'{item.part}에 맞는 품목을 찾지 못했습니다.'
+                part_name_col = self.inventory_part_name_header()
+                if part_name_col is None:
+                    return [], [], '부품명 열이 없어 신규 입고 행을 만들 수 없습니다.'
                 new_rows.append(NewInventoryRow(
                     part=item.part,
                     quantity=item.quantity,
                     columns=list(df.columns),
-                    name_col=name_cols[1],
+                    name_col=part_name_col,
                     qty_col=qty_col,
                     unit_price=item.unit_price,
                     part_code=item.part_code,
                 ))
                 changes.append(StockChange(
                     part=item.part,
+                    part_code=item.part_code,
                     quantity=item.quantity,
                     before_stock=0,
                     after_stock=item.quantity,
@@ -466,8 +558,11 @@ class GoogleSheetInventory:
                     return (
                         [],
                         [],
-                        f'{item.part} 출고 수량이 현재 재고보다 큽니다: '
-                        f'{item.quantity} > {current_stock}',
+                        self._build_outbound_quantity_exceeds_stock_message(
+                            part=item.part,
+                            requested_quantity=item.quantity,
+                            current_stock=current_stock,
+                        ),
                     )
                 next_stock = current_stock - item.quantity
             else:
@@ -480,6 +575,14 @@ class GoogleSheetInventory:
             changes.append(
                 StockChange(
                     part=item.part,
+                    part_code=(
+                        self._inventory_cell_text(
+                            df,
+                            frame_index,
+                            self.inventory_part_code_header(),
+                        )
+                        or item.part_code
+                    ),
                     quantity=item.quantity,
                     before_stock=current_stock,
                     after_stock=next_stock,
@@ -507,6 +610,28 @@ class GoogleSheetInventory:
             )
         return [int(index) for index in frame[mask].index]
 
+    # 출고 요청 수량과 현재 재고의 의미가 명확히 드러나는 부족 메시지를 생성합니다.
+    def _build_outbound_quantity_exceeds_stock_message(
+        self,
+        part: str,
+        requested_quantity: int,
+        current_stock: int,
+    ) -> str:
+        return (
+            f'{part} 출고 수량이 현재 재고보다 큽니다: '
+            f'요청 수량: {requested_quantity}개, 현재 재고: {current_stock}개'
+        )
+
+    def _inventory_cell_text(
+        self,
+        frame: pd.DataFrame,
+        row_index: int,
+        column_name: str | None,
+    ) -> str:
+        if column_name is None or column_name not in frame.columns:
+            return ''
+        return str(frame.at[row_index, column_name]).strip()
+
     def _parse_stock(self, value: object) -> int | None:
         try:
             number = float(str(value).strip())
@@ -516,29 +641,37 @@ class GoogleSheetInventory:
             return None
         return int(number)
 
+    # 주문 워크시트 기록 행을 방향과 상태값에 맞춰 생성합니다.
     def _order_row(
         self,
         direction: str,
         request_text: str,
         agent_name: str,
         change: StockChange,
+        status: str = ORDER_STATUS_SUCCESS,
+        order_id: str | None = None,
     ) -> list[object]:
         amount: int | str = (
             change.unit_price * change.quantity
             if change.unit_price is not None
             else ''
         )
+        header_values: dict[str, object] = {
+            '기록시각': datetime.now(timezone.utc).isoformat(),
+            '주문번호': order_id or '',
+            '에이전트': agent_name,
+            '구분': '입고' if direction == 'inbound' else '출고',
+            '부품번호': change.part_code or '',
+            '수량': change.quantity,
+            '변경전재고': change.before_stock,
+            '변경후재고': change.after_stock,
+            '가격': amount,
+            '요청내용': request_text,
+            '상태': status,
+        }
         return [
-            datetime.now(timezone.utc).isoformat(),
-            agent_name,
-            '입고' if direction == 'inbound' else '출고',
-            change.part,
-            change.quantity,
-            change.before_stock,
-            change.after_stock,
-            amount,
-            request_text,
-            '성공',
+            header_values.get(header, '')
+            for header in self.config.order_headers
         ]
 
     def _a1_cell(self, row: int, col: int) -> str:
@@ -565,6 +698,9 @@ class GoogleSheetInventory:
             'part',
             'sheet',
             'sheets',
+            '부품',
+            '품목',
+            '상품',
         }
         return [
             term
@@ -585,12 +721,6 @@ class GoogleSheetInventory:
     def _contains_any(self, text: str, needles: tuple[str, ...]) -> bool:
         lowered = text.lower()
         return any(needle.lower() in lowered for needle in needles)
-
-    def _price_column_index(self) -> int | None:
-        headers = list(self.config.inventory_headers)
-        if len(headers) < 4:
-            return None
-        return 3
 
     def _validate_inventory_headers(self, frame: pd.DataFrame) -> None:
         columns = [str(column).strip() for column in frame.columns]

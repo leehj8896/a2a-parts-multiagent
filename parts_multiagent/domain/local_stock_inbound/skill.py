@@ -10,10 +10,10 @@ from parts_multiagent.constants.skill_prefixes import (
 @dataclass(frozen=True)
 class LocalStockInboundSkillMetadata:
     skill_id: str = SKILL_LOCAL_STOCK_INBOUND
-    name: str = "피어 출고 요청하여 주문하기"
-    description: str = "사용자 앱이 로컬 에이전트에 피어 출고를 요청하여 부품을 주문합니다."
+    name: str = "공급처 후보 조회하여 주문하기"
+    description: str = "사용자 앱의 주문 품목 기준으로 공급 가능한 peer 후보와 확인 메시지를 반환합니다."
     tags: list[str] = field(default_factory=lambda: ["stock", "inbound", "local"])
-    examples: list[str] = field(default_factory=lambda: ["부품명 10개", "IC-2020 5개, R-100k 50"])
+    examples: list[str] = field(default_factory=lambda: ["FLT-101 3개 주문", "IC-2020 5개, R-100k 50 주문"])
     input_modes: list[str] = field(default_factory=lambda: ["application/json"])
     output_modes: list[str] = field(default_factory=lambda: ["application/json"])
 

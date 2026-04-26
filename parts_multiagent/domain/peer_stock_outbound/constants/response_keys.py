@@ -1,0 +1,13 @@
+"""피어 출고 응답 JSON key 상수 모음."""
+
+STATUS = "status"
+MESSAGE = "message"
+DETAILS = "details"
+ITEMS_SHIPPED = "items_shipped"
+ITEMS_UPDATED = "items_updated"
+LOCAL_UPDATE = "local_update"
+REQUESTED_PART = "requested_part"
+PART_CODE = "part_code"
+PART_NAME = "part_name"
+UNIT_PRICE = "unit_price"
+ORDER_ID = "order_id"

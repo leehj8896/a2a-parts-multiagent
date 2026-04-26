@@ -7,7 +7,6 @@
     "streaming": true
   },
   "defaultInputModes": [
-    "text",
     "application/json"
   ],
   "defaultOutputModes": [
@@ -32,7 +31,6 @@
       ],
       "id": "재고조회",
       "inputModes": [
-        "text",
         "application/json"
       ],
       "name": "로컬 재고 조회",
@@ -53,7 +51,6 @@
       ],
       "id": "전국재고조회",
       "inputModes": [
-        "text",
         "application/json"
       ],
       "name": "피어 에이전트 재고 조회",
@@ -67,17 +64,16 @@
       ]
     },
     {
-      "description": "사용자 앱이 로컬 에이전트에 피어 출고를 요청하여 부품을 주문합니다.",
+      "description": "사용자 앱의 주문 품목 기준으로 공급 가능한 peer 후보와 확인 메시지를 반환합니다.",
       "examples": [
-        "부품명 10개",
-        "IC-2020 5개, R-100k 50"
+        "FLT-101 3개 주문",
+        "IC-2020 5개, R-100k 50 주문"
       ],
       "id": "주문하기",
       "inputModes": [
-        "text",
         "application/json"
       ],
-      "name": "피어 출고 요청하여 주문하기",
+      "name": "공급처 후보 조회하여 주문하기",
       "outputModes": [
         "application/json"
       ],
@@ -89,6 +85,46 @@
       ]
     },
     {
+      "description": "사용자가 선택한 공급처와 품목으로 피어 출고를 요청하고 결제 URL을 반환합니다.",
+      "examples": [
+        "{\"supplier_agent\":\"B\",\"items\":[{\"part\":\"FLT-101\",\"quantity\":3}]}"
+      ],
+      "id": "주문선택",
+      "inputModes": [
+        "application/json"
+      ],
+      "name": "주문 후보 선택 후 결제 진행",
+      "outputModes": [
+        "application/json"
+      ],
+      "security": null,
+      "tags": [
+        "order",
+        "selection",
+        "payment"
+      ]
+    },
+    {
+      "description": "결제 완료된 주문의 상태를 '결제대기'에서 '성공'으로 업데이트합니다.",
+      "examples": [
+        "{\"order_id\":\"a1b2c3d4e5\"}"
+      ],
+      "id": "결제완료",
+      "inputModes": [
+        "application/json"
+      ],
+      "name": "주문 결제 완료 처리",
+      "outputModes": [
+        "application/json"
+      ],
+      "security": null,
+      "tags": [
+        "payment",
+        "completion",
+        "order"
+      ]
+    },
+    {
       "description": "로컬 재고에서 부품을 출고합니다.",
       "examples": [
         "부품명 5개",
@@ -96,7 +132,6 @@
       ],
       "id": "출고하기",
       "inputModes": [
-        "text",
         "application/json"
       ],
       "name": "로컬 재고 출고",
@@ -117,7 +152,6 @@
       ],
       "id": "피어입고요청하기",
       "inputModes": [
-        "text",
         "application/json"
       ],
       "name": "피어 재고 입고",
@@ -139,7 +173,6 @@
       ],
       "id": "피어출고요청하기",
       "inputModes": [
-        "text",
         "application/json"
       ],
       "name": "다른 에이전트에 출고요청 및 주문하기",

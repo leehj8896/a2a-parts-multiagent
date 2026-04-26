@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 
 from typing import Any
@@ -27,6 +28,9 @@ from parts_multiagent.domain.peer.constants.agent_summary_keys import (
     SKILL_ID,
     SKILL_NAME,
     SKILL_TAGS,
+)
+from parts_multiagent.domain.peer_stock_outbound.constants.response_keys import (
+    MESSAGE,
 )
 from parts_multiagent.utils.constants.structured_payload_keys import PATH, PAYLOAD
 
@@ -84,6 +88,7 @@ class PeerDirectory:
         path: str,
         payload: dict[str, Any],
         output_formats: list[str] | None = None,
+        raw_response: bool = False,
     ) -> str:
         """구조화 요청(DataPart)을 전송하고 응답을 받습니다.
         
@@ -101,7 +106,14 @@ class PeerDirectory:
         
         envelope = {PATH: path, PAYLOAD: payload}
         parts = [Part(root=DataPart(data=envelope))]
-        return await self._send_parts(agent_name, parts, accepted_output_modes=output_formats)
+        response_text = await self._send_parts(
+            agent_name,
+            parts,
+            accepted_output_modes=output_formats,
+        )
+        if raw_response:
+            return response_text
+        return self._display_text_from_structured_response(response_text)
 
     async def _send_parts(self, agent_name: str, parts: list[Part], accepted_output_modes: list[str] | None = None) -> str:
         """내부 메서드: Part 목록을 전송합니다.
@@ -119,7 +131,13 @@ class PeerDirectory:
                 f'자기 자신에게 원격 요청을 보낼 수 없습니다: {agent_name}'
             )
         if agent_name not in self.cards:
-            raise ValueError(f'피어 에이전트를 찾지 못했습니다: {agent_name}')
+            peer_errors = await self.refresh()
+            if agent_name not in self.cards:
+                errors = '\n'.join(f'- {error}' for error in peer_errors)
+                suffix = f'\n{errors}' if errors else ''
+                raise ValueError(
+                    f'피어 에이전트를 찾지 못했습니다: {agent_name}{suffix}'
+                )
 
         message_id = uuid.uuid4().hex
         message = Message(role=Role.user, parts=parts, message_id=message_id)
@@ -166,3 +184,14 @@ class PeerDirectory:
             if root is not None and getattr(root, 'text', None):
                 texts.append(root.text)
         return texts
+
+    # 구조화 응답 JSON에서 사용자 표시용 message를 우선 추출합니다.
+    def _display_text_from_structured_response(self, response_text: str) -> str:
+        try:
+            response_data = json.loads(response_text)
+        except json.JSONDecodeError:
+            return response_text
+        if not isinstance(response_data, dict):
+            return response_text
+        message = response_data.get(MESSAGE)
+        return message if isinstance(message, str) and message else response_text
